@@ -27,6 +27,11 @@ services:
               device_ids: ["0"]  # Modify for multiple GPUs: ["0", "1"]
               capabilities: [gpu]
 
+    volumes:
+      - ./model-cache/modelscope:/root/.cache/modelscope
+      - ./model-cache/mineru.json:/root/mineru.json
+      - ./model-cache/dot-modelscope:/root/.modelscope
+
   mineru-api:
     image: mineru:latest
     container_name: mineru-api
@@ -56,6 +61,11 @@ services:
             - driver: nvidia
               device_ids: ["0"]  # Modify for multiple GPUs: ["0", "1"]
               capabilities: [gpu]
+    volumes:
+      - ./model-cache/modelscope:/root/.cache/modelscope
+      - ./model-cache/mineru.json:/root/mineru.json
+      - ./model-cache/dot-modelscope:/root/.modelscope
+      - ./output:/vllm-workspace/output
 
   mineru-router:
     image: mineru:latest
@@ -91,6 +101,10 @@ services:
             - driver: nvidia
               device_ids: ["0"]  # Modify for multiple GPUs: ["0", "1"]
               capabilities: [gpu]
+    volumes:
+      - ./model-cache/modelscope:/root/.cache/modelscope
+      - ./model-cache/mineru.json:/root/mineru.json
+      - ./model-cache/dot-modelscope:/root/.modelscope
 
   mineru-gradio:
     image: mineru:latest
@@ -105,6 +119,7 @@ services:
     command:
       --server-name 0.0.0.0
       --server-port 7860
+      # --api-url http://192.168.111.101:38000  # Use the already-running mineru-api service instead of starting its own
       # --enable-api false  # If you want to disable the API, set this to false
       # --max-convert-pages 20  # If you want to limit the number of pages for conversion, set this to a specific number
       # parameters for vllm-engine
@@ -120,3 +135,9 @@ services:
             - driver: nvidia
               device_ids: ["0"]  # Modify for multiple GPUs: ["0", "1"]
               capabilities: [gpu]
+
+    volumes:
+      - ./model-cache/modelscope:/root/.cache/modelscope
+      - ./model-cache/mineru.json:/root/mineru.json
+      - ./model-cache/dot-modelscope:/root/.modelscope
+      - ./output:/vllm-workspace/output
