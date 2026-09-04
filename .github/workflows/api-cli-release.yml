@@ -108,6 +108,12 @@ jobs:
     needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            api-cli/RELEASE_NOTES.md
+          sparse-checkout-cone-mode: false
+
       - uses: actions/download-artifact@v4
         with:
           pattern: archives-*
@@ -118,6 +124,17 @@ jobs:
         working-directory: archives
         run: sha256sum * > checksums.txt
 
+      - name: Render release notes
+        run: |
+          set -euo pipefail
+          sed \
+            -e "s|__VERSION__|${{ needs.prepare.outputs.version }}|g" \
+            -e "s|__TAG__|${{ needs.prepare.outputs.tag }}|g" \
+            -e "s|__REPO__|${{ github.repository }}|g" \
+            -e "s|__SHA__|${{ github.sha }}|g" \
+            -e "s|__BRANCH__|${{ github.ref_name }}|g" \
+            api-cli/RELEASE_NOTES.md > rendered-release-notes.md
+
       - uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -127,22 +144,4 @@ jobs:
           target_commitish: ${{ github.sha }}
           prerelease: true
           files: archives/*
-          body: |
-            Automated build of `api-cli` (the MinerU HTTP CLI client, talks to a
-            self-hosted `mineru-api` or the official mineru.net cloud API) from
-            commit ${{ github.sha }} on branch `${{ github.ref_name }}`.
-
-            | Platform | Archive |
-            |---|---|
-            | Linux amd64 | `mineru-cli_linux_amd64.tar.gz` |
-            | Linux arm64 | `mineru-cli_linux_arm64.tar.gz` |
-            | macOS amd64 (Intel) | `mineru-cli_darwin_amd64.tar.gz` |
-            | macOS arm64 (Apple Silicon) | `mineru-cli_darwin_arm64.tar.gz` |
-            | Windows amd64 | `mineru-cli_windows_amd64.zip` |
-            | Windows arm64 | `mineru-cli_windows_arm64.zip` |
-
-            `checksums.txt` has the SHA-256 of every archive above.
-
-            Archive names are version-free on purpose, so once this release is marked
-            "latest" (not a pre-release), it can be fetched without knowing the version, e.g.:
-            `https://github.com/${{ github.repository }}/releases/latest/download/mineru-cli_linux_amd64.tar.gz`
+          body_path: rendered-release-notes.md
