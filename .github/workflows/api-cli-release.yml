@@ -1,0 +1,142 @@
+# Builds the api-cli/ Go CLI (mineru-cli) for Linux/macOS/Windows on amd64+arm64
+# and publishes the binaries as a GitHub Release.
+name: mineru-cli-release
+
+on:
+  push:
+    branches:
+      - "feature/kaihang"
+    paths:
+      - "api-cli/**"
+      - ".github/workflows/api-cli-release.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to release, e.g. v0.1.0 (default: dev-<short-sha>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - name: Compute version and release tag
+        id: vars
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="dev-$(echo "${{ github.sha }}" | cut -c1-7)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=api-cli-${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: api-cli/go.mod
+          cache-dependency-path: api-cli/go.sum
+
+      - name: Build
+        working-directory: api-cli
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w -X mineru-cli/cmd.Version=${{ needs.prepare.outputs.version }}" \
+            -o "dist/mineru-cli${ext}" .
+
+      - name: Package
+        working-directory: api-cli
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          name="mineru-cli_${{ needs.prepare.outputs.version }}_${GOOS}_${GOARCH}"
+          mkdir -p archives
+          if [ "$GOOS" = "windows" ]; then
+            (cd dist && zip -q "../archives/${name}.zip" "mineru-cli.exe")
+          else
+            tar -C dist -czf "archives/${name}.tar.gz" "mineru-cli"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archives-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: api-cli/archives/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archives-*
+          merge-multiple: true
+          path: archives
+
+      - name: Checksums
+        working-directory: archives
+        run: sha256sum * > checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: mineru-cli ${{ needs.prepare.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          files: archives/*
+          body: |
+            Automated build of `api-cli` (the MinerU HTTP CLI client, talks to a
+            self-hosted `mineru-api` or the official mineru.net cloud API) from
+            commit ${{ github.sha }} on branch `${{ github.ref_name }}`.
+
+            | Platform | Archive |
+            |---|---|
+            | Linux amd64 | `mineru-cli_${{ needs.prepare.outputs.version }}_linux_amd64.tar.gz` |
+            | Linux arm64 | `mineru-cli_${{ needs.prepare.outputs.version }}_linux_arm64.tar.gz` |
+            | macOS amd64 (Intel) | `mineru-cli_${{ needs.prepare.outputs.version }}_darwin_amd64.tar.gz` |
+            | macOS arm64 (Apple Silicon) | `mineru-cli_${{ needs.prepare.outputs.version }}_darwin_arm64.tar.gz` |
+            | Windows amd64 | `mineru-cli_${{ needs.prepare.outputs.version }}_windows_amd64.zip` |
+            | Windows arm64 | `mineru-cli_${{ needs.prepare.outputs.version }}_windows_arm64.zip` |
+
+            `checksums.txt` has the SHA-256 of every archive above.
