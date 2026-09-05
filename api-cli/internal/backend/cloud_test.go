@@ -108,7 +108,7 @@ func TestCloudBackendFlow(t *testing.T) {
 	}
 
 	outDir := filepath.Join(tmpDir, "out")
-	written, err := be.Download(context.Background(), jobID, status, outDir)
+	written, err := be.Download(context.Background(), jobID, status, outDir, false)
 	if err != nil {
 		t.Fatalf("Download: %v", err)
 	}
@@ -127,3 +127,84 @@ func TestCloudBackendFlow(t *testing.T) {
 // serverURL lets the mock handlers above self-reference the httptest server's
 // URL (only known once httptest.NewServer returns).
 var serverURL string
+
+// TestCloudBackendDownloadPruning checks that Download keeps only markdown
+// and images by default, matching what the local backend returns, and keeps
+// everything when verbose is set.
+func TestCloudBackendDownloadPruning(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zip/full", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		zw := zip.NewWriter(w)
+		for name, content := range map[string]string{
+			"full.md":                  "# doc",
+			"layout.json":              "{}",
+			"abc123_model.json":        "{}",
+			"abc123_origin.pdf":        "%PDF",
+			"abc123_content_list.json": "[]",
+			"images/pic.jpg":           "jpgbytes",
+		} {
+			f, _ := zw.Create(name)
+			_, _ = f.Write([]byte(content))
+		}
+		_ = zw.Close()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	be := NewCloudBackend(srv.URL, "tok")
+	status := JobStatus{Files: []FileResult{
+		{Name: "doc.pdf", State: StateDone, ZipURL: srv.URL + "/zip/full"},
+	}}
+
+	t.Run("default prunes extras", func(t *testing.T) {
+		outDir := t.TempDir()
+		written, err := be.Download(context.Background(), "job", status, outDir, false)
+		if err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+		gotNames := basenames(written)
+		wantNames := []string{"full.md", "pic.jpg"}
+		if !sameSet(gotNames, wantNames) {
+			t.Fatalf("written = %v, want only %v", gotNames, wantNames)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "doc", "layout.json")); !os.IsNotExist(err) {
+			t.Fatalf("layout.json should have been deleted, stat err = %v", err)
+		}
+	})
+
+	t.Run("verbose keeps everything", func(t *testing.T) {
+		outDir := t.TempDir()
+		written, err := be.Download(context.Background(), "job", status, outDir, true)
+		if err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+		if len(written) != 6 {
+			t.Fatalf("written = %v, want 6 files", written)
+		}
+	})
+}
+
+func basenames(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = filepath.Base(p)
+	}
+	return out
+}
+
+func sameSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			return false
+		}
+	}
+	return true
+}

@@ -233,7 +233,11 @@ func normalizeCloudState(s string) string {
 	}
 }
 
-func (b *CloudBackend) Download(ctx context.Context, jobID string, status JobStatus, outDir string) ([]string, error) {
+// Download extracts each file's result zip. The cloud API always returns
+// its full raw output (layout/model/content-list JSON, the original PDF,
+// plus markdown and images); unless verbose is set, everything but the
+// markdown and images is discarded so cloud and local output line up.
+func (b *CloudBackend) Download(ctx context.Context, jobID string, status JobStatus, outDir string, verbose bool) ([]string, error) {
 	var written []string
 	for _, f := range status.Files {
 		if f.State != StateDone {
@@ -276,7 +280,33 @@ func (b *CloudBackend) Download(ctx context.Context, jobID string, status JobSta
 		if err != nil {
 			return written, fmt.Errorf("extract %s: %w", f.Name, err)
 		}
+		if !verbose {
+			extracted = pruneToEssentials(extracted)
+		}
 		written = append(written, extracted...)
 	}
 	return written, nil
+}
+
+// pruneToEssentials deletes every extracted file except markdown and images,
+// returning the paths that remain. It's the cloud API's raw zip trimmed down
+// to match what the local backend returns by default.
+func pruneToEssentials(paths []string) []string {
+	kept := make([]string, 0, len(paths))
+	for _, p := range paths {
+		isMarkdown := strings.EqualFold(filepath.Ext(p), ".md")
+		isImage := false
+		for _, part := range strings.Split(filepath.ToSlash(filepath.Dir(p)), "/") {
+			if part == "images" {
+				isImage = true
+				break
+			}
+		}
+		if isMarkdown || isImage {
+			kept = append(kept, p)
+			continue
+		}
+		_ = os.Remove(p)
+	}
+	return kept
 }

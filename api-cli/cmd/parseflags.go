@@ -15,6 +15,7 @@ type parseOptFlags struct {
 	noFormula bool
 	noTable   bool
 	pageRange string
+	verbose   bool
 }
 
 func addParseOptFlags(cmd *cobra.Command, f *parseOptFlags) {
@@ -25,6 +26,7 @@ func addParseOptFlags(cmd *cobra.Command, f *parseOptFlags) {
 	fl.BoolVar(&f.noFormula, "no-formula", false, "disable formula recognition")
 	fl.BoolVar(&f.noTable, "no-table", false, "disable table recognition")
 	fl.StringVar(&f.pageRange, "pages", "", `page range to parse, e.g. "1-10" (cloud backend only)`)
+	fl.BoolVar(&f.verbose, "verbose", false, "keep the full raw output (layout/model/content-list JSON, original file) instead of just markdown + images; local backend must be told this at submit time")
 }
 
 func (f parseOptFlags) toParseOptions() backend.ParseOptions {
@@ -35,5 +37,6 @@ func (f parseOptFlags) toParseOptions() backend.ParseOptions {
 		FormulaEnable: !f.noFormula,
 		TableEnable:   !f.noTable,
 		PageRange:     f.pageRange,
+		Verbose:       f.verbose,
 	}
 }

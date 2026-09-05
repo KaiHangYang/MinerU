@@ -25,6 +25,11 @@ type ParseOptions struct {
 	FormulaEnable bool
 	TableEnable   bool
 	PageRange     string // cloud only, e.g. "1-10"
+	// Verbose asks the backend for its full raw output (layout/model/content-list
+	// JSON, the original file, etc.) instead of just markdown + images.
+	// Local backend: requested from the server at submit time, since that's
+	// when it decides what to include in the result zip.
+	Verbose bool
 }
 
 // FileResult is the per-file outcome of a submitted job.
@@ -95,6 +100,9 @@ type Backend interface {
 	Status(ctx context.Context, jobID string) (JobStatus, error)
 
 	// Download fetches the finished results into outDir and returns the
-	// paths it wrote (extracted files, not the intermediate zips).
-	Download(ctx context.Context, jobID string, status JobStatus, outDir string) ([]string, error)
+	// paths it wrote (extracted files, not the intermediate zips). Unless
+	// verbose is set, only markdown and images are kept (cloud always
+	// receives everything server-side, so filtering happens here; local
+	// already asked for a minimal set at submit time).
+	Download(ctx context.Context, jobID string, status JobStatus, outDir string, verbose bool) ([]string, error)
 }

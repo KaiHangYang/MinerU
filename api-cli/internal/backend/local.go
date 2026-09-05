@@ -67,12 +67,16 @@ func (b *LocalBackend) Submit(ctx context.Context, files []string, opts ParseOpt
 		parseMethod = "ocr"
 	}
 	fields := map[string]string{
-		"backend":             model,
-		"parse_method":        parseMethod,
-		"formula_enable":      strconv.FormatBool(opts.FormulaEnable),
-		"table_enable":        strconv.FormatBool(opts.TableEnable),
-		"response_format_zip": "true",
-		"return_images":       "true",
+		"backend":              model,
+		"parse_method":         parseMethod,
+		"formula_enable":       strconv.FormatBool(opts.FormulaEnable),
+		"table_enable":         strconv.FormatBool(opts.TableEnable),
+		"response_format_zip":  "true",
+		"return_images":        "true",
+		"return_content_list":  strconv.FormatBool(opts.Verbose),
+		"return_middle_json":   strconv.FormatBool(opts.Verbose),
+		"return_model_output":  strconv.FormatBool(opts.Verbose),
+		"return_original_file": strconv.FormatBool(opts.Verbose),
 	}
 	if opts.Lang != "" {
 		fields["lang_list"] = opts.Lang
@@ -173,7 +177,9 @@ func (b *LocalBackend) Status(ctx context.Context, jobID string) (JobStatus, err
 	return JobStatus{JobID: jobID, State: state, Files: files}, nil
 }
 
-func (b *LocalBackend) Download(ctx context.Context, jobID string, status JobStatus, outDir string) ([]string, error) {
+// Download extracts whatever the server sent; verbose is unused because the
+// local backend already chose what to include back at Submit time.
+func (b *LocalBackend) Download(ctx context.Context, jobID string, status JobStatus, outDir string, verbose bool) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.BaseURL+"/tasks/"+jobID+"/result", nil)
 	if err != nil {
 		return nil, err
