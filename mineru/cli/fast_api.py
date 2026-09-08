@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager, suppress
@@ -61,8 +62,9 @@ from mineru.cli.vlm_preload import (
 )
 from mineru.backend.vlm.vlm_analyze import shutdown_cached_models
 from mineru.utils.cli_parser import arg_parse
-from mineru.utils.check_sys_env import is_mac_environment
+from mineru.utils.check_sys_env import check_nvidia_gpu_health, is_mac_environment
 from mineru.utils.config_reader import (
+    get_device,
     get_max_concurrent_requests as read_max_concurrent_requests,
     get_processing_window_size,
 )
@@ -923,6 +925,9 @@ async def create_async_parse_task(
         raise
 
 
+GPU_HEALTH_CHECK_TTL_SECONDS = 5.0
+
+
 class AsyncTaskManager:
     def __init__(self, fastapi_app: FastAPI):
         self.app = fastapi_app
@@ -938,6 +943,9 @@ class AsyncTaskManager:
         self.task_cleanup_interval_seconds = get_task_cleanup_interval_seconds()
         self.manager_wakeup = asyncio.Event()
         self._next_submit_order = 1
+        self._device_mode: Optional[str] = None
+        self._gpu_health_cache: Optional[tuple[float, bool, Optional[str]]] = None
+        self._gpu_health_lock = asyncio.Lock()
 
     async def start(self) -> None:
         self.is_shutting_down = False
@@ -1082,6 +1090,40 @@ class AsyncTaskManager:
         ):
             return False
         return self.last_worker_error is None
+
+    async def check_gpu_health(self) -> tuple[bool, Optional[str]]:
+        """通过 nvidia-smi 探测 GPU/驱动是否正常，结果会短暂缓存以避免频繁探测。
+
+        仅在当前 worker 运行在 CUDA 设备上时才会实际探测，非 GPU 部署直接视为健康。
+        """
+        if self._device_mode is None:
+            try:
+                self._device_mode = str(get_device() or "cpu")
+            except Exception as exc:
+                logger.warning("Failed to resolve device mode for GPU health check: {}", exc)
+                self._device_mode = "cpu"
+
+        if not self._device_mode.lower().startswith("cuda"):
+            return True, None
+
+        now = time.monotonic()
+        if self._gpu_health_cache is not None:
+            cached_at, healthy, error = self._gpu_health_cache
+            if now - cached_at < GPU_HEALTH_CHECK_TTL_SECONDS:
+                return healthy, error
+
+        async with self._gpu_health_lock:
+            now = time.monotonic()
+            if self._gpu_health_cache is not None:
+                cached_at, healthy, error = self._gpu_health_cache
+                if now - cached_at < GPU_HEALTH_CHECK_TTL_SECONDS:
+                    return healthy, error
+
+            healthy, error = await asyncio.to_thread(check_nvidia_gpu_health)
+            self._gpu_health_cache = (time.monotonic(), healthy, error)
+            if not healthy:
+                logger.error("GPU health check failed: {}", error)
+            return healthy, error
 
     def _wake_waiters(self) -> None:
         self.manager_wakeup.set()
@@ -1374,11 +1416,23 @@ async def health_check():
             },
         )
 
+    gpu_healthy, gpu_error = await task_manager.check_gpu_health()
+    if not gpu_healthy:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "version": __version__,
+                "error": f"GPU is unhealthy: {gpu_error}",
+            },
+        )
+
     stats = task_manager.get_stats()
     return {
         "status": "healthy",
         "version": __version__,
         "protocol_version": API_PROTOCOL_VERSION,
+        "gpu_healthy": gpu_healthy,
         "queued_tasks": stats[TASK_PENDING],
         "processing_tasks": stats[TASK_PROCESSING],
         "completed_tasks": stats[TASK_COMPLETED],
