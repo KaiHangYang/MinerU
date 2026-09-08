@@ -115,7 +115,7 @@ func TestCloudBackendFlow(t *testing.T) {
 	if len(written) != 1 {
 		t.Fatalf("Download wrote %d files, want 1: %v", len(written), written)
 	}
-	content, err := os.ReadFile(filepath.Join(outDir, "test", "full.md"))
+	content, err := os.ReadFile(filepath.Join(outDir, "full.md"))
 	if err != nil {
 		t.Fatalf("read downloaded file: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestCloudBackendDownloadPruning(t *testing.T) {
 		if !sameSet(gotNames, wantNames) {
 			t.Fatalf("written = %v, want only %v", gotNames, wantNames)
 		}
-		if _, err := os.Stat(filepath.Join(outDir, "doc", "layout.json")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(outDir, "layout.json")); !os.IsNotExist(err) {
 			t.Fatalf("layout.json should have been deleted, stat err = %v", err)
 		}
 	})

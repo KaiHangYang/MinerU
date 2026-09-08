@@ -21,7 +21,7 @@ type parseOptFlags struct {
 func addParseOptFlags(cmd *cobra.Command, f *parseOptFlags) {
 	fl := cmd.Flags()
 	fl.StringVar(&f.lang, "lang", "ch", "document language, improves OCR accuracy (e.g. ch, en, japan, korean)")
-	fl.StringVar(&f.model, "model", "pipeline", `parsing model: "pipeline" (fast, general) or "vlm" (higher accuracy; local backend also accepts hybrid-engine etc.)`)
+	fl.StringVar(&f.model, "model", "", `parsing model: "pipeline" (fast, general) or "vlm" (higher accuracy; local backend also accepts hybrid-engine etc.); defaults to "hybrid-engine" on the local backend and "pipeline" on cloud`)
 	fl.BoolVar(&f.ocr, "ocr", false, "force OCR parsing (for image-based/scanned PDFs)")
 	fl.BoolVar(&f.noFormula, "no-formula", false, "disable formula recognition")
 	fl.BoolVar(&f.noTable, "no-table", false, "disable table recognition")

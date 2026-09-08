@@ -238,6 +238,13 @@ func normalizeCloudState(s string) string {
 // plus markdown and images); unless verbose is set, everything but the
 // markdown and images is discarded so cloud and local output line up.
 func (b *CloudBackend) Download(ctx context.Context, jobID string, status JobStatus, outDir string, verbose bool) ([]string, error) {
+	doneCount := 0
+	for _, f := range status.Files {
+		if f.State == StateDone {
+			doneCount++
+		}
+	}
+
 	var written []string
 	for _, f := range status.Files {
 		if f.State != StateDone {
@@ -274,8 +281,15 @@ func (b *CloudBackend) Download(ctx context.Context, jobID string, status JobSta
 			return written, copyErr
 		}
 
-		stem := strings.TrimSuffix(f.Name, filepath.Ext(f.Name))
-		extracted, err := extractZip(tmp.Name(), filepath.Join(outDir, stem))
+		destDir := outDir
+		if doneCount > 1 {
+			// Several files in this job would otherwise all extract the same
+			// entry names (e.g. "full.md") into outDir; keep one subfolder
+			// per file, named by its stem, to avoid collisions.
+			stem := strings.TrimSuffix(f.Name, filepath.Ext(f.Name))
+			destDir = filepath.Join(outDir, stem)
+		}
+		extracted, err := extractZip(tmp.Name(), destDir, nil)
 		os.Remove(tmp.Name())
 		if err != nil {
 			return written, fmt.Errorf("extract %s: %w", f.Name, err)

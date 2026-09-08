@@ -12,7 +12,11 @@ import (
 // extractZip unpacks src into destDir (created if needed) and returns the
 // paths of every regular file it wrote. It refuses entries that would escape
 // destDir via ".." path segments.
-func extractZip(src, destDir string) ([]string, error) {
+//
+// If rewrite is non-nil, it's applied to each entry's path before joining it
+// onto destDir; an entry that rewrites to "" is skipped entirely (used to
+// drop directory entries that become empty after stripping path segments).
+func extractZip(src, destDir string, rewrite func(name string) string) ([]string, error) {
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return nil, fmt.Errorf("open zip: %w", err)
@@ -25,7 +29,14 @@ func extractZip(src, destDir string) ([]string, error) {
 
 	var written []string
 	for _, f := range r.File {
-		target := filepath.Join(destDir, f.Name)
+		name := f.Name
+		if rewrite != nil {
+			name = rewrite(name)
+			if name == "" {
+				continue
+			}
+		}
+		target := filepath.Join(destDir, name)
 		if !strings.HasPrefix(target, filepath.Clean(destDir)+string(os.PathSeparator)) && target != filepath.Clean(destDir) {
 			return written, fmt.Errorf("zip entry escapes output dir: %s", f.Name)
 		}

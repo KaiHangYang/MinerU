@@ -60,7 +60,7 @@ func (b *LocalBackend) Submit(ctx context.Context, files []string, opts ParseOpt
 
 	model := opts.Model
 	if model == "" {
-		model = "pipeline"
+		model = "hybrid-engine"
 	}
 	parseMethod := "auto"
 	if opts.OCR {
@@ -210,5 +210,29 @@ func (b *LocalBackend) Download(ctx context.Context, jobID string, status JobSta
 	}
 	tmp.Close()
 
-	return extractZip(tmp.Name(), outDir)
+	return extractZip(tmp.Name(), outDir, flattenLocalEntry(len(status.Files) > 1))
+}
+
+// flattenLocalEntry strips the local mineru-api server's zip layout of
+// "<pdf_name>/<method_dir>/<relative_path>" (method_dir being e.g. "auto",
+// "vlm", "hybrid_auto" — an implementation detail the caller already knows,
+// having asked for it) down to just "<relative_path>". When the job has more
+// than one file, the "<pdf_name>" level is kept as "<pdf_name>/<relative_path>"
+// so results from different files don't collide in outDir; with a single
+// file there's nothing to disambiguate, so it's dropped too.
+func flattenLocalEntry(multiFile bool) func(string) string {
+	return func(name string) string {
+		parts := strings.Split(filepath.ToSlash(name), "/")
+		if len(parts) < 2 {
+			return name
+		}
+		rest := parts[2:]
+		if multiFile {
+			rest = append([]string{parts[0]}, rest...)
+		}
+		if len(rest) == 0 {
+			return ""
+		}
+		return filepath.Join(rest...)
+	}
 }
