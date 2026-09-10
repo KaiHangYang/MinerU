@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -141,7 +142,7 @@ func ReplaceExecutable(targetPath string, content []byte) error {
 			os.Remove(tmpPath)
 			return writeErr
 		}
-		if err := os.Rename(tmpPath, targetPath); err != nil {
+		if err := installOver(tmpPath, targetPath); err != nil {
 			os.Remove(tmpPath)
 			return fmt.Errorf("install %s: %w", targetPath, err)
 		}
@@ -152,6 +153,39 @@ func ReplaceExecutable(targetPath string, content []byte) error {
 	}
 
 	return replaceViaSudo(targetPath, content)
+}
+
+// installOver moves the staged file at tmpPath into place as targetPath.
+func installOver(tmpPath, targetPath string) error {
+	if runtime.GOOS != "windows" {
+		return os.Rename(tmpPath, targetPath)
+	}
+	return installOverWindows(tmpPath, targetPath)
+}
+
+// installOverWindows handles the case ReplaceExecutable exists for in the
+// first place: targetPath is usually the binary currently executing this
+// process. Unlike Unix, Windows won't let a rename atomically replace a
+// file that's memory-mapped for execution — os.Rename(tmpPath, targetPath)
+// fails with "Access is denied" even though moving that same running file
+// *aside* to a fresh name is fine. So here we move the running target out
+// of the way first, then move the new binary into its place.
+//
+// The backup can't always be removed immediately (the old process may still
+// be exiting), so cleanup is best-effort; a leftover backup from a previous
+// update is cleaned up here too, once Windows has released it.
+func installOverWindows(tmpPath, targetPath string) error {
+	backupPath := targetPath + ".old"
+	os.Remove(backupPath)
+
+	if err := os.Rename(targetPath, backupPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return err
+	}
+	os.Remove(backupPath)
+	return nil
 }
 
 func writeExecutable(f *os.File, content []byte) error {

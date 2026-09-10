@@ -13,13 +13,21 @@ import (
 	"mineru-cli/internal/backend"
 )
 
-// FileConfig is the on-disk shape of ~/.config/mineru-cli/config.json,
-// written by `mineru-cli config set` (see cmd/config.go).
+// FileConfig is the on-disk shape of mineru-cli/config.json under
+// os.UserConfigDir(), written by `mineru-cli config set` (see cmd/config.go).
+// os.UserConfigDir() resolves to ~/.config on Linux, ~/Library/Application
+// Support on macOS, and %AppData% (Roaming) on Windows — use `mineru-cli
+// config show` to see the actual resolved path rather than assuming ~/.
 type FileConfig struct {
 	Backend    string `json:"backend,omitempty"` // "local" or "cloud"
 	APIURL     string `json:"api_url,omitempty"`
 	CloudToken string `json:"cloud_token,omitempty"`
 	CloudURL   string `json:"cloud_url,omitempty"`
+}
+
+// Path returns the resolved location of the config file on this platform.
+func Path() (string, error) {
+	return configPath()
 }
 
 func configPath() (string, error) {

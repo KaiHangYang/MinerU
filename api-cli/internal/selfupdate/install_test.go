@@ -135,3 +135,86 @@ func TestReplaceExecutableDirectWrite(t *testing.T) {
 		t.Fatalf("dir has %d entries, want 1: %v", len(entries), entries)
 	}
 }
+
+func TestInstallOverWindows(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "mineru-cli.exe")
+	tmp := filepath.Join(dir, ".mineru-cli-update-123")
+
+	if err := os.WriteFile(target, []byte("old-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("new-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installOverWindows(tmp, target); err != nil {
+		t.Fatalf("installOverWindows: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new-version" {
+		t.Fatalf("content = %q, want %q", got, "new-version")
+	}
+
+	// The backup should be cleaned up once the swap succeeds.
+	if _, err := os.Stat(target + ".old"); !os.IsNotExist(err) {
+		t.Fatalf("expected backup to be removed, stat err = %v", err)
+	}
+}
+
+func TestInstallOverWindowsCleansUpStaleBackup(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "mineru-cli.exe")
+	tmp := filepath.Join(dir, ".mineru-cli-update-123")
+	backup := target + ".old"
+
+	if err := os.WriteFile(target, []byte("old-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("new-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a leftover backup from a prior update that couldn't delete
+	// itself while still running.
+	if err := os.WriteFile(backup, []byte("stale-backup"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installOverWindows(tmp, target); err != nil {
+		t.Fatalf("installOverWindows: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new-version" {
+		t.Fatalf("content = %q, want %q", got, "new-version")
+	}
+}
+
+func TestInstallOverWindowsFreshInstall(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "mineru-cli.exe") // does not exist yet
+	tmp := filepath.Join(dir, ".mineru-cli-update-123")
+
+	if err := os.WriteFile(tmp, []byte("new-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installOverWindows(tmp, target); err != nil {
+		t.Fatalf("installOverWindows: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new-version" {
+		t.Fatalf("content = %q, want %q", got, "new-version")
+	}
+}

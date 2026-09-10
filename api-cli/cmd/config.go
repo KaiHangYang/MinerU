@@ -10,7 +10,7 @@ import (
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Manage the saved default backend (~/.config/mineru-cli/config.json)",
+	Short: "Manage the saved default backend (run `mineru-cli config show` to see where it's stored)",
 }
 
 var configShowCmd = &cobra.Command{
@@ -20,6 +20,9 @@ var configShowCmd = &cobra.Command{
 		cfg, err := config.Load()
 		if err != nil {
 			return err
+		}
+		if path, err := config.Path(); err == nil {
+			fmt.Printf("path:        %s\n", path)
 		}
 		fmt.Printf("backend:     %s\n", orNone(cfg.Backend))
 		fmt.Printf("api_url:     %s\n", orNone(cfg.APIURL))
