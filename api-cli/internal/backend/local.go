@@ -18,8 +18,10 @@ import (
 // LocalBackend talks to a self-hosted mineru-api server
 // (https://github.com/opendatalab/MinerU, the `mineru-api` entrypoint).
 type LocalBackend struct {
-	BaseURL string
-	Client  *http.Client
+	BaseURL         string
+	Client          *http.Client
+	protocolChecked bool
+	v1              bool
 }
 
 func NewLocalBackend(baseURL string) *LocalBackend {
@@ -38,6 +40,12 @@ type localSubmitResponse struct {
 }
 
 func (b *LocalBackend) Submit(ctx context.Context, files []string, opts ParseOptions) (string, error) {
+	if err := b.detectProtocol(ctx); err != nil {
+		return "", err
+	}
+	if b.v1 {
+		return b.submitV1(ctx, files, opts)
+	}
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
 
@@ -126,6 +134,12 @@ type localStatusResponse struct {
 }
 
 func (b *LocalBackend) Status(ctx context.Context, jobID string) (JobStatus, error) {
+	if err := b.detectProtocol(ctx); err != nil {
+		return JobStatus{}, err
+	}
+	if b.v1 {
+		return b.statusV1(ctx, jobID)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.BaseURL+"/tasks/"+jobID, nil)
 	if err != nil {
 		return JobStatus{}, err
@@ -180,6 +194,12 @@ func (b *LocalBackend) Status(ctx context.Context, jobID string) (JobStatus, err
 // Download extracts whatever the server sent; verbose is unused because the
 // local backend already chose what to include back at Submit time.
 func (b *LocalBackend) Download(ctx context.Context, jobID string, status JobStatus, outDir string, verbose bool) ([]string, error) {
+	if err := b.detectProtocol(ctx); err != nil {
+		return nil, err
+	}
+	if b.v1 {
+		return b.downloadV1(ctx, status, outDir, verbose)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.BaseURL+"/tasks/"+jobID+"/result", nil)
 	if err != nil {
 		return nil, err

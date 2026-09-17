@@ -51,8 +51,18 @@ mineru-cli result <job-id> -o ./output --wait
 ```
 
 Useful flags on `parse`/`submit`: `--lang ch|en|...`, `--model pipeline|vlm`, `--ocr`,
-`--no-formula`, `--no-table`, `--pages 1-10` (cloud backend only). Run `mineru-cli --help`
+`--no-formula`, `--no-table`, `--pages 1-10` (cloud or local V1). Run `mineru-cli --help`
 or `mineru-cli <command> --help` for the full reference.
+
+## MinerU 4 server support
+
+The local backend discovers V1 servers and uses uploads, parse jobs, and per-file
+ZIP artifacts. Existing 3.x servers continue to use the legacy tasks API. For V1,
+`--model` accepts `flash`, `basic`, `standard` (default), or `advanced`; legacy
+`pipeline`, `hybrid-engine`, and `vlm-engine` map to basic, standard, and advanced.
+V1 OCR language is configured on the server; `--lang`, `--no-formula`, and
+`--no-table` only apply to cloud/legacy servers. V1 `--verbose` preserves all
+available bundle JSON; original input files are not part of the V1 bundle.
 
 ## Downloads
 

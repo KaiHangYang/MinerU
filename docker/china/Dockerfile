@@ -5,21 +5,20 @@
 FROM docker.m.daocloud.io/vllm/vllm-openai:v0.21.0
 # FROM docker.m.daocloud.io/vllm/vllm-openai:v0.21.0-cu129
 
-# Install libgl for opencv support & Noto fonts for Chinese characters
+# Install libgl for opencv support
 RUN apt-get update && \
     apt-get install -y \
-        fonts-noto-core \
-        fonts-noto-cjk \
-        fontconfig \
         libgl1 && \
-    fc-cache -fv && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install mineru latest
-RUN python3 -m pip install -U 'mineru[core]>=3.4.0' -i https://mirrors.aliyun.com/pypi/simple --break-system-packages && \
+# Install MinerU 4 with Torch; reuse vLLM from the base image.
+RUN python3 -m pip install -U 'mineru[torch]>=4.0,<5' -i https://mirrors.aliyun.com/pypi/simple --break-system-packages && \
     python3 -m pip cache purge
 
-# Set the entry point to activate the virtual environment, download models on first run
-# (skipped automatically once already present, e.g. in a mounted cache volume), and run the command line tool
-ENTRYPOINT ["/bin/bash", "-c", "export MINERU_MODEL_SOURCE=local && mineru-models-download -s modelscope -m all && exec \"$@\"", "--"]
+# Keep model downloads and runtime selection aligned, including starts without a GPU.
+ENV MINERU_MODEL_SMALL_BACKEND=torch \
+    MINERU_MODEL_VLM_ENGINE=vllm
+
+# Synchronize models into the mounted cache on first startup, then reuse verified repositories.
+ENTRYPOINT ["/bin/bash", "-c", "set -e; if ! mineru-kit models verify --tier standard --small-backend torch --vlm-engine vllm; then mineru-kit models download --tier standard --small-backend torch --vlm-engine vllm -s modelscope; fi; export MINERU_MODEL_SOURCE=local; exec \"$@\"", "--"]

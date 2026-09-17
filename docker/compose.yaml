@@ -1,6 +1,6 @@
 services:
   mineru-openai-server:
-    image: mineru:latest
+    image: mineru:4
     container_name: mineru-openai-server
     restart: always
     profiles: ["openai-server"]
@@ -8,10 +8,13 @@ services:
       - 30000:30000
     environment:
       MINERU_MODEL_SOURCE: local
-    entrypoint: mineru-openai-server
     command:
-      --host 0.0.0.0
-      --port 30000
+      - mineru-kit
+      - vlm-server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "30000"
       # --gpu-memory-utilization 0.5  # If encountering VRAM shortage, reduce the KV cache size by this parameter; if VRAM issues persist, try lowering it further to `0.4` or below.
     ulimits:
       memlock: -1
@@ -29,11 +32,12 @@ services:
 
     volumes:
       - ./model-cache/modelscope:/root/.cache/modelscope
-      - ./model-cache/mineru.json:/root/mineru.json
+      - ./model-cache/mineru:/root/.mineru
+      - ./model-cache/huggingface:/root/.cache/huggingface
       - ./model-cache/dot-modelscope:/root/.modelscope
 
   mineru-api:
-    image: mineru:latest
+    image: mineru:4
     container_name: mineru-api
     restart: always
     profiles: ["api"]
@@ -41,19 +45,19 @@ services:
       - 8000:8000
     environment:
       MINERU_MODEL_SOURCE: local
-    entrypoint: mineru-api
     command:
-      --host 0.0.0.0
-      --port 8000
-      # --allow-public-http-client  # Disabled by default; when binding to 0.0.0.0 or ::, this re-enables *-http-client backends and server_url. Enable only if you accept the SSRF risk.
-      # parameters for vllm-engine
-      # --gpu-memory-utilization 0.5  # If encountering VRAM shortage, reduce the KV cache size by this parameter; if VRAM issues persist, try lowering it further to `0.4` or below.
+      - mineru-kit
+      - api-server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
     ulimits:
       memlock: -1
       stack: 67108864
     ipc: host
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/v1/health || exit 1"]
     deploy:
       resources:
         reservations:
@@ -63,12 +67,13 @@ services:
               capabilities: [gpu]
     volumes:
       - ./model-cache/modelscope:/root/.cache/modelscope
-      - ./model-cache/mineru.json:/root/mineru.json
+      - ./model-cache/mineru:/root/.mineru
+      - ./model-cache/huggingface:/root/.cache/huggingface
       - ./model-cache/dot-modelscope:/root/.modelscope
       - ./output:/vllm-workspace/output
 
   mineru-router:
-    image: mineru:latest
+    image: mineru:4
     container_name: mineru-router
     restart: always
     profiles: ["router"]
@@ -76,24 +81,30 @@ services:
       - 8002:8002
     environment:
       MINERU_MODEL_SOURCE: local
-    entrypoint: mineru-router
     command:
-      --host 0.0.0.0
-      --port 8002
-      --local-gpus auto
-      # --allow-public-http-client  # Disabled by default; when binding to 0.0.0.0 or ::, this re-enables *-http-client backends and server_url. Enable only if you accept the SSRF risk.
+      - mineru-kit
+      - router
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8002"
+      - --local-gpus
+      - auto
+      - --worker-tier
+      - standard
+      - --worker-concurrency
+      - "1"
+      # --preload-models  # Preload models in router-managed mineru-kit api-server workers.
       # To aggregate existing mineru-api services instead of starting local workers:
       # --local-gpus none
       # --upstream-url http://mineru-api:8000
       # --upstream-url http://mineru-api-2:8000
-      # parameters for vllm-engine
-      # --gpu-memory-utilization 0.5  # If encountering VRAM shortage, reduce the KV cache size by this parameter; if VRAM issues persist, try lowering it further to `0.4` or below.
     ulimits:
       memlock: -1
       stack: 67108864
     ipc: host
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/v1/health || exit 1"]
     deploy:
       resources:
         reservations:
@@ -103,27 +114,29 @@ services:
               capabilities: [gpu]
     volumes:
       - ./model-cache/modelscope:/root/.cache/modelscope
-      - ./model-cache/mineru.json:/root/mineru.json
+      - ./model-cache/mineru:/root/.mineru
+      - ./model-cache/huggingface:/root/.cache/huggingface
       - ./model-cache/dot-modelscope:/root/.modelscope
 
-  mineru-gradio:
-    image: mineru:latest
-    container_name: mineru-gradio
+  mineru-webui:
+    image: mineru:4
+    container_name: mineru-webui
     restart: always
-    profiles: ["gradio"]
+    profiles: ["webui"]
     ports:
       - 7860:7860
     environment:
       MINERU_MODEL_SOURCE: local
-    entrypoint: mineru-gradio
     command:
-      --server-name 0.0.0.0
-      --server-port 7860
-      # --api-url http://192.168.111.101:38000  # Use the already-running mineru-api service instead of starting its own
-      # --enable-api false  # If you want to disable the API, set this to false
-      # --max-convert-pages 20  # If you want to limit the number of pages for conversion, set this to a specific number
-      # parameters for vllm-engine
-      # --gpu-memory-utilization 0.5  # If encountering VRAM shortage, reduce the KV cache size by this parameter; if VRAM issues persist, try lowering it further to `0.4` or below.
+      - mineru-kit
+      - webui
+      - --server-name
+      - 0.0.0.0
+      - --server-port
+      - "7860"
+      # --api-url http://mineru-api:8000  # Reuse an existing V1 API server.
+      # --no-enable-api  # Disable the Gradio event API.
+      # --api-server-tier standard  # Configure the managed V1 API server capability tier.
     ulimits:
       memlock: -1
       stack: 67108864
@@ -138,6 +151,7 @@ services:
 
     volumes:
       - ./model-cache/modelscope:/root/.cache/modelscope
-      - ./model-cache/mineru.json:/root/mineru.json
+      - ./model-cache/mineru:/root/.mineru
+      - ./model-cache/huggingface:/root/.cache/huggingface
       - ./model-cache/dot-modelscope:/root/.modelscope
       - ./output:/vllm-workspace/output

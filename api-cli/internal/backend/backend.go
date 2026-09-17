@@ -20,24 +20,25 @@ const (
 // field is honored by every backend; each implementation maps what it can.
 type ParseOptions struct {
 	Lang          string // e.g. "ch", "en"
-	Model         string // local: pipeline/vlm-engine/hybrid-engine; cloud: pipeline/vlm/MinerU-HTML
+	Model         string // local V1: flash/basic/standard/advanced; legacy: pipeline/vlm-engine/hybrid-engine; cloud: pipeline/vlm/MinerU-HTML
 	OCR           bool
 	FormulaEnable bool
 	TableEnable   bool
-	PageRange     string // cloud only, e.g. "1-10"
+	PageRange     string // cloud and local V1, e.g. "1-10"
 	// Verbose asks the backend for its full raw output (layout/model/content-list
 	// JSON, the original file, etc.) instead of just markdown + images.
-	// Local backend: requested from the server at submit time, since that's
+	// Legacy local backend: requested from the server at submit time, since that's
 	// when it decides what to include in the result zip.
 	Verbose bool
 }
 
 // FileResult is the per-file outcome of a submitted job.
 type FileResult struct {
-	Name   string
-	State  string
-	ZipURL string // set when the backend hands back a URL to fetch instead of streaming bytes
-	Error  string
+	Name       string
+	State      string
+	ZipURL     string // set when the backend hands back a URL to fetch instead of streaming bytes
+	Error      string
+	ArtifactID string // V1 Files API identifier for the per-file result ZIP
 }
 
 // JobStatus is the normalized status of a submitted job (one or more files).

@@ -72,7 +72,7 @@ func init() {
 	resultCmd.Flags().StringVarP(&resultOutDir, "output", "o", "./output", "local directory to write results into")
 	resultCmd.Flags().BoolVar(&resultWait, "wait", false, "block until the job finishes instead of failing if it's still running")
 	resultCmd.Flags().DurationVar(&resultTimeout, "timeout", 30*time.Minute, "max time to wait with --wait")
-	resultCmd.Flags().BoolVar(&resultVerbose, "verbose", false, "keep the full raw output (layout/model/content-list JSON, original file) instead of just markdown + images (cloud backend only; local already decided this at submit time)")
+	resultCmd.Flags().BoolVar(&resultVerbose, "verbose", false, "keep all available JSON and other artifacts instead of just markdown + images (cloud and local V1; legacy local servers decide this at submit time)")
 	resultCmd.Flags().IntVar(&resultSplitLevel, "split-level", 0, "split the markdown output by heading level: 0 = one file (default), 1 = split on \"#\" headings, 2 = split on \"##\" headings")
 	rootCmd.AddCommand(resultCmd)
 }
