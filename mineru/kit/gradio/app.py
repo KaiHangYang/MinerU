@@ -14,7 +14,14 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from ...errors import MineruError
-from ...filetypes import FLASH_ONLY_PARSE_EXTENSIONS, IMAGE_EXTENSIONS, OFFICE_EXTENSIONS, PARSEABLE_EXTENSIONS, PDF_EXTENSIONS
+from ...filetypes import (
+    FLASH_ONLY_PARSE_EXTENSIONS,
+    HTML_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    OFFICE_EXTENSIONS,
+    PARSEABLE_EXTENSIONS,
+    PDF_EXTENSIONS,
+)
 from ...types import TIERS, Tier
 from ...utils.logger import configure_global_log_level
 from ...utils.stdio import configure_standard_streams
@@ -26,10 +33,10 @@ from .client import (
     V1ServerCapabilities,
 )
 from .i18n import MESSAGES, localized_text, preview_placeholder, translations
-from .ofd_preview import prepare_ofd_preview
 from .page_range import effective_page_range as _effective_page_range
 from .page_range import pdf_page_metadata, validate_max_pages
 from .pdf_preview import pdf_preview_js, register_pdf_preview_resources
+from .source_preview import prepare_source_preview
 from .status import (
     DEFAULT_STATUS as _DEFAULT_STATUS,
     STATUS_COMPLETED,
@@ -115,20 +122,29 @@ _KIT_MENU_CSS = """
 .mineru-kit-download-trigger,
 .mineru-kit-download-trigger .html-container,
 .mineru-kit-download-trigger .prose {
-    min-width: 0 !important; padding: 0 !important; margin: 0; line-height: 0; overflow: visible;
+    min-width: 0 !important; padding: 0 !important; margin: 0; line-height: 0 !important; overflow: visible;
 }
 .mineru-kit-download-trigger { min-height: 32px; border: 0; background: transparent; }
+/* Gradio 主题对 .gradio-style button 的原生按钮样式优先级更高（HF Space 上
+   无前缀改写时），此处声明须带 !important 才能稳定生效；hover 变色同理。 */
 .mineru-kit-download-trigger .mineru-kit-download-icon {
     display: flex; align-items: center; justify-content: center; gap: 6px;
-    width: 100%; height: 32px; margin: 0; padding: 6px 8px; border: 0; border-radius: 6px;
-    font-size: 14px; line-height: 20px; white-space: nowrap;
-    color: var(--body-text-color, #1f2937); background: transparent; cursor: pointer;
+    width: 100% !important; height: 32px !important; margin: 0; padding: 6px 8px !important;
+    border: 0; border-radius: 6px;
+    font-size: 14px !important; line-height: 20px; white-space: nowrap;
+    color: var(--body-text-color, #1f2937) !important; background: transparent !important; cursor: pointer;
 }
 .mineru-kit-download-icon svg { width: 20px; height: 20px; margin: 0; flex: 0 0 20px; }
 .mineru-kit-download-menu:hover .mineru-kit-download-icon,
-.mineru-kit-download-icon:focus-visible { background: var(--background-fill-secondary, #f3f4f6); }
+.mineru-kit-download-icon:focus-visible { background: var(--background-fill-secondary, #f3f4f6) !important; }
 .mineru-kit-download-icon:focus-visible { outline: 2px solid var(--mineru-accent, #f97316); outline-offset: 2px; }
-.mineru-kit-download-options {
+/* Gradio 会在页面端给自定义 CSS 加 .gradio-container-<ver> .contain 前缀抬升
+   优先级，但该改写在部分环境（如 HF Space 实测）不会执行，此时类选择器
+   (0,1,0) 会输给 Column 自带的 div.svelte-siXXXX { position: relative }
+   scoped 规则 (0,1,1)，浮窗被顶开 38px 并使 hover 桥失效。
+   组件已带 elem_id，用 ID 选择器不依赖该改写，在所有环境稳赢；
+   hover/focus 显示规则须同步用 ID，否则压不过基础规则 (1,0,0)。 */
+#mineru-kit-download-options {
     position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
     width: max-content !important; min-width: 0 !important;
     display: flex !important; flex-direction: column; gap: 4px; padding: 6px;
@@ -137,13 +153,13 @@ _KIT_MENU_CSS = """
     opacity: 0; pointer-events: none; transform: translateY(-4px); visibility: hidden;
     transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
 }
-.mineru-kit-download-menu:hover .mineru-kit-download-options,
-.mineru-kit-download-menu:focus-within .mineru-kit-download-options {
+.mineru-kit-download-menu:hover #mineru-kit-download-options,
+.mineru-kit-download-menu:focus-within #mineru-kit-download-options {
     opacity: 1; pointer-events: auto; transform: translateY(0); visibility: visible;
 }
 /* 填满图标与浮层之间的间隙，避免鼠标移向下载项时菜单提前关闭。 */
 .mineru-kit-download-options::before { content: ""; position: absolute; left: 0; right: 0; top: -7px; height: 7px; }
-.mineru-kit-download-options :is(button, a) {
+#mineru-kit-download-options :is(button, a) {
     justify-content: flex-start; width: 100%; min-height: 34px; padding: 6px 10px; white-space: nowrap;
     border: 0; border-radius: 6px; background: transparent; box-shadow: none; text-align: left; gap: 8px;
 }
@@ -153,29 +169,30 @@ _KIT_MENU_CSS = """
     -webkit-mask: var(--mineru-download-format-icon) center / contain no-repeat;
     mask: var(--mineru-download-format-icon) center / contain no-repeat;
 }
-.mineru-kit-download-options :is(button, a):hover { background: var(--background-fill-secondary, #f3f4f6); }
+#mineru-kit-download-options :is(button, a):hover { background: var(--background-fill-secondary, #f3f4f6); }
 .mineru-kit-empty-preview { min-height: 160px; display: grid; place-items: center; opacity: .65; }
-/* Gradio 6.8 会按逗号拆分并重写选择器，PDF/OFD 使用独立选择器避免破坏 :has。 */
-/* PDF/OFD 直接贴合面板边框，独立预览不再沿用旧组件的标签留白与额外高度。 */
-.mineru-kit-preview:has(.mineru-pdf-frame), .mineru-kit-preview:has(.mineru-ofd-frame) { padding: 0; gap: 0; overflow: hidden; }
+/* Gradio 6.8 会按逗号拆分并重写选择器，PDF/源文档预览使用独立选择器避免破坏 :has。 */
+/* PDF/源文档预览直接贴合面板边框，独立预览不再沿用旧组件的标签留白与额外高度。 */
+.mineru-kit-preview:has(.mineru-pdf-frame),
+.mineru-kit-preview:has(.mineru-source-frame) { padding: 0; gap: 0; overflow: hidden; }
 .mineru-kit-preview > .block.mineru-kit-pdf-preview,
-.mineru-kit-preview > .block.mineru-kit-ofd-preview {
+.mineru-kit-preview > .block.mineru-kit-source-preview {
     height: var(--mineru-preview-content-height, 775px) !important;
     min-height: 0 !important; max-height: none !important;
 }
-.mineru-kit-pdf-preview, .mineru-kit-ofd-preview { height: 100%; padding: 0 !important; }
+.mineru-kit-pdf-preview, .mineru-kit-source-preview { height: 100%; padding: 0 !important; }
 .mineru-kit-pdf-preview .html-container, .mineru-kit-pdf-preview .prose,
-.mineru-kit-ofd-preview .html-container, .mineru-kit-ofd-preview .prose { height: 100%; padding: 0 !important; }
+.mineru-kit-source-preview .html-container, .mineru-kit-source-preview .prose { height: 100%; padding: 0 !important; }
 .mineru-kit-pdf-preview:not(:has(.mineru-pdf-frame, [role="alert"])) { display: none !important; }
-.mineru-pdf-frame, .mineru-ofd-frame { display: block; width: 100%; height: 100%; border: 0; }
-.mineru-kit-ofd-preview:not(:has(iframe)):not(:has([data-mineru-i18n-key])) { display: none !important; }
+.mineru-pdf-frame, .mineru-source-frame { display: block; width: 100%; height: 100%; border: 0; }
+.mineru-kit-source-preview:not(:has(iframe)):not(:has([data-mineru-i18n-key])) { display: none !important; }
 .mineru-kit-image-preview img { max-height: var(--mineru-pdf-page-height, 720px); object-fit: contain; }
-/* 桌面两栏共用行高，PDF/OFD 填满伸展后的面板；窄屏仍采用独立预览高度。 */
+/* 桌面两栏共用行高，PDF/源文档预览填满伸展后的面板；窄屏仍采用独立预览高度。 */
 @media (min-width: 901px) {
   .mineru-kit-results, .mineru-kit-preview:has(.mineru-pdf-frame),
-  .mineru-kit-preview:has(.mineru-ofd-frame) { align-self: stretch !important; height: auto; }
+  .mineru-kit-preview:has(.mineru-source-frame) { align-self: stretch !important; height: auto; }
   .mineru-kit-preview > .block.mineru-kit-pdf-preview,
-  .mineru-kit-preview > .block.mineru-kit-ofd-preview { flex: 1 1 0; height: auto !important; }
+  .mineru-kit-preview > .block.mineru-kit-source-preview { flex: 1 1 0; height: auto !important; }
 }
 @media (max-width: 900px) {
   .mineru-kit-workspace { flex-direction: column !important; }
@@ -317,6 +334,7 @@ def build_gradio_app(
         raise ValueError("V1 API server did not advertise any parsing tier")
     preferred_tier = _default_tier(capabilities)
     file_types = _supported_file_types()
+    examples = _example_files(file_types) if enable_example else []
     app_css = _resource_text("gradio_app.css") + _KIT_MENU_CSS + _download_icon_css()
     i18n = gr.I18n(**translations())
     app_js = _resource_text("gradio_app.js").replace(
@@ -411,6 +429,15 @@ def build_gradio_app(
                     )
                     clear_button = gr.ClearButton(value=i18n("mineru.clear"), scale=1, min_width=1)
                 status_panel = gr.HTML(_status_html(), elem_classes=["mineru-status-panel"])
+                if examples:
+                    gr.Examples(
+                        examples=examples,
+                        inputs=input_file,
+                        label=i18n("mineru.examples"),
+                        elem_id="mineru-kit-examples",
+                        # 示例全部落在第一页，超出由卡片内部滚动；避免出现翻页控件。
+                        examples_per_page=_EXAMPLES_PER_PAGE,
+                    )
 
             with gr.Column(scale=4, min_width=340, elem_classes=["mineru-kit-preview", "mineru-preview-pane"]):
                 pdf_preview = gr.File(visible=False, interactive=False, label="PDF", type="filepath")
@@ -436,12 +463,13 @@ def build_gradio_app(
                     min_height=320,
                     elem_classes=["mineru-kit-office-preview", "mineru-office-preview-html"],
                 )
-                ofd_preview = gr.HTML(
-                    value="", apply_default_css=False,
-                    elem_classes=["mineru-kit-ofd-preview"],
+                source_preview = gr.HTML(
+                    value="",
+                    apply_default_css=False,
+                    elem_classes=["mineru-kit-source-preview"],
                 )
-                ofd_ticket = gr.Textbox(value="", visible=False)
-                ofd_receipt = gr.Textbox(value="", visible=False)
+                source_ticket = gr.Textbox(value="", visible=False)
+                source_receipt = gr.Textbox(value="", visible=False)
                 generic_preview = gr.HTML(
                     value=preview_placeholder("empty_preview"),
                     visible=True,
@@ -485,11 +513,6 @@ def build_gradio_app(
                                 elem_classes=[f"mineru-kit-download-{format_name}"],
                             )
                 download_notice = gr.HTML(value="", elem_classes=["mineru-kit-download-notice"])
-
-        if enable_example:
-            examples = _example_files(file_types)
-            if examples:
-                gr.Examples(examples=examples, inputs=input_file, label=i18n("mineru.examples"), elem_id="mineru-kit-examples")
 
         artifact_state = gr.State(value=None)
         active_run_id = gr.Textbox(value="", visible=False)
@@ -539,7 +562,8 @@ def build_gradio_app(
                     _preview_update(gr, preview_placeholder("source_preview"), visible=False),
                     *reset_result,
                 )
-            if suffix == "ofd":
+            if suffix == "ofd" or suffix in HTML_EXTENSIONS:
+                # OFD/HTML 源预览由独立异步事件挂载，此处只隐藏占位组件。
                 return (
                     _pdf_preview_update(gr, None),
                     _preview_update(gr, None, visible=False),
@@ -575,24 +599,36 @@ def build_gradio_app(
         input_file.change(fn=None, inputs=input_file, outputs=pdf_viewer, js=pdf_preview_js("reset"), **private_event_kwargs)
         clear_button.click(fn=None, inputs=[], outputs=pdf_viewer, js=pdf_preview_js("clear"), **private_event_kwargs)
 
-        ofd_script = _resource_text("gradio_ofd_preview.js")
+        source_script = _resource_text("gradio_source_preview.js")
         input_file.change(
-            fn=None, inputs=input_file, outputs=[ofd_ticket, ofd_preview],
-            js=f"(...args) => ({ofd_script})('begin', ...args)",
+            fn=None,
+            inputs=input_file,
+            outputs=[source_ticket, source_preview],
+            js=f"(...args) => ({source_script})('begin', ...args)",
             **private_event_kwargs,
         )
         # Gradio 6.8 的纯前端事件不可靠地触发 then；通过请求值变化启动后台转换。
-        render_ofd = ofd_ticket.change(
-            fn=prepare_ofd_preview, inputs=[input_file, ofd_ticket], outputs=ofd_receipt,
-            concurrency_limit=None, trigger_mode="multiple", **private_event_kwargs,
+        render_source_preview = source_ticket.change(
+            fn=prepare_source_preview,
+            inputs=[input_file, source_ticket],
+            outputs=source_receipt,
+            concurrency_limit=None,
+            trigger_mode="multiple",
+            **private_event_kwargs,
         )
-        render_ofd.then(
-            fn=None, inputs=ofd_receipt, outputs=ofd_preview,
-            js=f"(...args) => ({ofd_script})('apply', ...args)", **private_event_kwargs,
+        render_source_preview.then(
+            fn=None,
+            inputs=source_receipt,
+            outputs=source_preview,
+            js=f"(...args) => ({source_script})('apply', ...args)",
+            **private_event_kwargs,
         )
         clear_button.click(
-            fn=None, inputs=[], outputs=[ofd_ticket, ofd_preview],
-            js=f"(...args) => ({ofd_script})('clear', ...args)", **private_event_kwargs,
+            fn=None,
+            inputs=[],
+            outputs=[source_ticket, source_preview],
+            js=f"(...args) => ({source_script})('clear', ...args)",
+            **private_event_kwargs,
         )
 
         download_script = _resource_text("gradio_download.js")
@@ -800,8 +836,8 @@ def build_gradio_app(
                         gr.update(value="", visible=False),
                         gr.update(value=generic_html, visible=bool(generic_html)),
                     )
-                    if _is_office(source_path) or suffix == "ofd":
-                        # Office/OFD 源预览已在上传时挂载，成功后保留原内容和浏览位置。
+                    if _is_office(source_path) or suffix == "ofd" or suffix in HTML_EXTENSIONS:
+                        # Office/OFD/HTML 源预览已在上传时挂载，成功后保留原内容和浏览位置。
                         result_preview_updates = tuple(gr.skip() for _ in range(4))
                     return (
                         rendered_html,
@@ -1053,6 +1089,10 @@ def _example_files(file_types: list[str]) -> list[str]:
         return []
     suffixes = set(file_types)
     return [str(path) for path in sorted(example_root.iterdir()) if path.is_file() and path.suffix.lower() in suffixes]
+
+
+# 示例数量预期很小；单页放全部文件，翻页交给卡片内部滚动。
+_EXAMPLES_PER_PAGE = 1000
 
 
 def _gradio_public_base_url(request: object | None = None) -> str:

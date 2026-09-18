@@ -2,19 +2,19 @@
 
 状态: Draft
 读者: 核心开发、编程 Agent、代码审查者
-范围: 4.x（next 分支）开发中已知的结构性陷阱与兼容面联动要求
+范围: 4.x 开发中已知的结构性陷阱与兼容面联动要求
 来源: MINERU-1 代码结构分析报告（SHANNON，2026-09-01），逐条对照代码复核后固化。行号以 commit `317428b8` 为基准。
 
 本清单收录的是"改动前必须知道，否则容易做错"的事项。每条给出代码锚点与正确做法；纯推测、无法操作的观察不收录。
 
 ## 1. 双轨兼容面的联动要求
 
-### 1.1 tier / backend 双入参过渡层
+### 1.1 backend 不再是入参
 
-`parser/tier.py:230` 的 `resolve_tier_and_backend(tier, backend)` 是为旧专家用户保留的过渡层：同时接受公开 `tier` 和本地专家 `backend` 入参，并做兼容性校验（`_backend_supports_tier`）。
+历史过渡层 `resolve_tier_and_backend(tier, backend)` 与 `mineru-kit parse --backend` 专家参数（含 `pipeline`/`vlm-*` 等别名）已移除：backend 只用于推断 tier，推断后即被丢弃，没有独立作用。
 
-- 新代码只走 `tier`；`backend_for_tier`（`parser/tier.py:183`）已保证 basic/standard/advanced 共用同一个 hybrid-engine，仅 effort 不同（`HYBRID_EFFORT_BY_TIER` `parser/tier.py:25`）。
-- 不要新增依赖 `backend` 入参的分支；`pipeline`/`vlm-*` 仅作为 legacy 别名存在。
+- 新代码只走 `tier`；`backend_for_tier`（`parser/tier.py`）保证 basic/standard/advanced 共用同一个 hybrid-engine，仅 effort 不同（`HYBRID_EFFORT_BY_TIER`）。
+- 不要在任何 CLI / SDK / API 入口重新引入 `backend` 入参；backend 仅作为 `ParserRuntimeOptions.backend` 内部派生值存在。
 
 ### 1.2 共享文档协议与缓存必须同步
 
