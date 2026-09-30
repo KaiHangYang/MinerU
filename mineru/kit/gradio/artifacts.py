@@ -6,18 +6,22 @@ import html
 import json
 import re
 import shutil
+import time
 import uuid
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Literal, cast
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, urlsplit
 
 from bs4 import BeautifulSoup
-from docvortex.assets import parse_image_data_uri_strict, validate_image_sidecar_path
+from docvortex.assets import AssetStore, parse_image_data_uri_strict, validate_image_sidecar_path
 from docvortex.document.pdf import PDFDocument
 from docvortex.document.pdf.pdfium import safe_rewrite_pdf_bytes_with_pdfium_result
+from docvortex.export import materialize_middle
 from loguru import logger
 
 from ...filetypes import IMAGE_EXTENSIONS, PDF_EXTENSIONS
@@ -34,28 +38,21 @@ from ...render import (
     StructuredContentRenderOptions,
     render,
 )
-from ...types import (
-    AlgorithmBodyBlock,
-    BlockBase,
-    ChartBlock,
-    ChartBodyBlock,
-    CodeBlock,
-    CodeBodyBlock,
-    ImageBlock,
-    ImageBodyBlock,
-    ImagePayloadBlock,
-    MiddleJson,
-    TableBlock,
-    TableBodyBlock,
-)
+from ...types import BlockBase, ImagePayloadBlock, MiddleJson
 
 DownloadFormat = Literal["markdown", "json", "html", "docx", "latex", "epub", "pdf"]
 
-_HTML_IMAGE_RE = re.compile(
-    r"(?P<prefix><img\b[^>]*?\bsrc\s*=\s*)(?P<quote>[\"'])(?P<src>[^\"']+)(?P=quote)",
-    re.IGNORECASE,
-)
-_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg"}
+
+@contextmanager
+def _output_stage(stage: str, artifacts: RunArtifacts) -> Iterator[None]:
+    """按素材目录标识记录输出子阶段耗时，便于与转换及浏览器回执关联。"""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        logger.debug(
+            "WebUI output stage={} artifacts={} elapsed={:.3f}s", stage, artifacts.root.name, time.monotonic() - started
+        )
 
 
 @dataclass
@@ -229,11 +226,12 @@ def persist_parse_result(
             encoding="utf-8",
         )
 
-    origin_pdf, page_indices = _prepare_origin_pdf(
-        artifacts.source_path,
-        page_range=page_range,
-        output_path=artifacts.root / "origin.pdf",
-    )
+    with _output_stage("origin_pdf", artifacts):
+        origin_pdf, page_indices = _prepare_origin_pdf(
+            artifacts.source_path,
+            page_range=page_range,
+            output_path=artifacts.root / "origin.pdf",
+        )
     artifacts.origin_pdf_path = origin_pdf
     artifacts.page_indices = tuple(page_indices)
 
@@ -245,29 +243,32 @@ def persist_parse_result(
         asset_root=source_path.parent,
     )
     try:
-        materialized = _materialize_middle_json(result.middle_json, image_context)
-        artifacts.middle_json_path.write_text(ParseResult(middle_json=materialized).to_json(), encoding="utf-8")
-        markdown = cast(
-            str,
-            render(
-                materialized,
-                RenderFormat.MARKDOWN,
-                options=MarkdownRenderOptions(),
-            ),
-        )
-        artifacts.markdown_path.write_text(markdown, encoding="utf-8")
-        structured = cast(
-            dict[str, Any],
-            render(
-                materialized,
-                RenderFormat.STRUCTURED_CONTENT,
-                options=StructuredContentRenderOptions(),
-            ),
-        )
-        artifacts.structured_content_path.write_text(
-            json.dumps(structured, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        with _output_stage("materialize", artifacts):
+            materialized = _materialize_middle_json(result.middle_json, image_context)
+            artifacts.middle_json_path.write_text(ParseResult(middle_json=materialized).to_json(), encoding="utf-8")
+        with _output_stage("markdown", artifacts):
+            markdown = cast(
+                str,
+                render(
+                    materialized,
+                    RenderFormat.MARKDOWN,
+                    options=MarkdownRenderOptions(),
+                ),
+            )
+            artifacts.markdown_path.write_text(markdown, encoding="utf-8")
+        with _output_stage("structured_json", artifacts):
+            structured = cast(
+                dict[str, Any],
+                render(
+                    materialized,
+                    RenderFormat.STRUCTURED_CONTENT,
+                    options=StructuredContentRenderOptions(),
+                ),
+            )
+            artifacts.structured_content_path.write_text(
+                json.dumps(structured, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
     finally:
         _close_image_context(image_context)
 
@@ -276,12 +277,13 @@ def persist_parse_result(
 
         layout_path = artifacts.root / "layout.pdf"
         try:
-            draw_layout_overlay(
-                result.middle_json,
-                origin_pdf,
-                layout_path,
-                page_indices=artifacts.page_indices,
-            )
+            with _output_stage("layout_pdf", artifacts):
+                draw_layout_overlay(
+                    result.middle_json,
+                    origin_pdf,
+                    layout_path,
+                    page_indices=artifacts.page_indices,
+                )
         except Exception as exc:
             logger.warning("Skipping Gradio layout overlay for {}: {}", artifacts.stem, exc)
         else:
@@ -292,15 +294,16 @@ def persist_parse_result(
 
 def render_html_preview(artifacts: RunArtifacts, *, public_base_url: str) -> str:
     """用独立 iframe 展示公共 HTML renderer 的完整输出，保留样式及公式脚本。"""
-    value = _render_html(artifacts, public_base_url=public_base_url)
-    # srcdoc 默认继承外层页面的基准地址，显式指定自身才能让章节锚点在预览内跳转。
-    value = value.replace("<head>", '<head>\n<base href="about:srcdoc">', 1)
-    value = _prepare_preview_links(value)
-    return (
-        '<iframe class="mineru-rendered-html-frame" title="Markdown preview" '
-        'sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" '
-        f'srcdoc="{html.escape(value, quote=True)}"></iframe>'
-    )
+    with _output_stage("html_preview", artifacts):
+        value = _render_html(artifacts, public_base_url=public_base_url)
+        # srcdoc 默认继承外层页面的基准地址，显式指定自身才能让章节锚点在预览内跳转。
+        value = value.replace("<head>", '<head>\n<base href="about:srcdoc">', 1)
+        value = _prepare_preview_links(value)
+        return (
+            '<iframe class="mineru-rendered-html-frame" title="Markdown preview" '
+            'sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" '
+            f'srcdoc="{html.escape(value, quote=True)}"></iframe>'
+        )
 
 
 def _prepare_preview_links(document: str) -> str:
@@ -540,34 +543,26 @@ def _close_image_context(context: _ImageContext) -> None:
 
 
 def _materialize_middle_json(middle_json: MiddleJson, context: _ImageContext) -> MiddleJson:
-    """复制 Middle JSON，并为 PDF bbox 或 inline image 准备目标 renderer 所需的图片载荷。"""
-    copied = middle_json.model_copy(deep=True)
-    for page in copied.pages:
-        page.blocks = [_materialize_block(block, context, middle_page_idx=page.page_idx, owner=block) for block in page.blocks]
-    return copied
+    """由宿主提供素材字节，统一交给 DocVortex 命名、消解冲突并改写引用。"""
+    images = context.output_dir / "images"
+    _ensure_path_inside(context.output_dir, images)
+    existing = AssetStore()
+    for path in sorted(images.rglob("*")):
+        _ensure_path_inside(images, path)
+        if path.is_symlink():
+            raise ValueError(f"Image assets must not contain symlinks: {path}")
+        if path.is_file():
+            existing.add(path.relative_to(context.output_dir).as_posix(), path.read_bytes())
 
-
-def _materialize_block(
-    block: BlockBase,
-    context: _ImageContext,
-    *,
-    middle_page_idx: int,
-    owner: BlockBase,
-) -> BlockBase:
-    """沿语义树传递所属视觉父块，仅为图片载荷和富 HTML 正文物化素材。"""
-    if isinstance(block, (CodeBlock, CodeBodyBlock, AlgorithmBodyBlock)):
-        return block
-    if isinstance(block, (ImageBlock, TableBlock, ChartBlock)):
-        owner = block
-    updates: dict[str, Any] = {}
-    if isinstance(block, ImagePayloadBlock):
+    def resolve_image(block: ImagePayloadBlock, page_idx: int) -> tuple[bytes, str] | None:
+        """保持内嵌载荷、本地路径及 PDF 补裁的现有分支顺序和错误处理。"""
         data: bytes | None = None
         extension = "jpg"
         if block.image_base64:
             try:
                 data, extension = parse_image_data_uri_strict(block.image_base64)
             except ValueError:
-                data = None
+                return None
         elif block.image_path:
             safe_path = validate_image_sidecar_path(block.image_path)
             candidate = (context.asset_root / safe_path).resolve()
@@ -576,103 +571,24 @@ def _materialize_block(
                 data = candidate.read_bytes()
                 extension = candidate.suffix.lstrip(".") or extension
         elif block.bbox is not None:
-            data = context.crop_for_block(block, middle_page_idx=middle_page_idx)
-        if data:
-            updates["image_path"] = _write_materialized_asset(
-                context.output_dir,
-                data,
-                extension,
-                page_idx=middle_page_idx,
-                owner=owner,
-            )
-            updates["image_base64"] = None
-            updates["image_url"] = None
+            data = context.crop_for_block(block, middle_page_idx=page_idx)
+        return (data, extension) if data else None
 
-    content = getattr(block, "content", None)
-    if isinstance(content, list):
-        updates["content"] = [
-            _materialize_block(child, context, middle_page_idx=middle_page_idx, owner=owner)
-            if isinstance(child, BlockBase)
-            else child
-            for child in content
-        ]
-    elif isinstance(block, (ImageBodyBlock, TableBodyBlock, ChartBodyBlock)) and "<img" in content.lower():
-        updates["content"] = _materialize_markup_images(content, context, page_idx=middle_page_idx, owner=owner)
-
-    return block.model_copy(update=updates, deep=True) if updates else block
-
-
-def _write_materialized_asset(
-    output_dir: Path,
-    data: bytes,
-    extension: str,
-    *,
-    page_idx: int,
-    owner: BlockBase,
-    ordinal: int | None = None,
-) -> str:
-    """使用原始页索引和所属块命名，表内多图区分序号，冲突文件禁止覆盖。"""
-    safe_extension = extension.lower().lstrip(".") or "jpg"
-    if f".{safe_extension}" not in _IMAGE_SUFFIXES:
-        raise ValueError(f"Unsupported image extension: {extension}")
-    if owner.index is None:
-        raise ValueError("Image owner must have a block index")
-    kind = str(owner.type)
-    if ordinal is not None and kind != "image":
-        kind += "_image"
-    suffix = f"_{ordinal}" if ordinal is not None else ""
-    stem = f"page_{page_idx}_{kind}_{owner.index}{suffix}"
-    # 冲突后缀独立于表内图片序号，避免占用另一张内嵌图片的正式名称。
-    for attempt in range(10000):
-        duplicate = f"_duplicate_{attempt}" if attempt else ""
-        relative = validate_image_sidecar_path(f"images/{stem}{duplicate}.{safe_extension}")
-        target = output_dir / relative
-        _ensure_path_inside(output_dir, target)
+    document, assets = materialize_middle(
+        middle_json,
+        existing,
+        image_resolver=resolve_image,
+        asset_resolver=_asset_resolver(context.asset_root),
+    )
+    for relative_path, payload in assets.items():
+        target = context.output_dir / relative_path
+        _ensure_path_inside(context.output_dir, target)
+        if target.is_symlink():
+            raise ValueError(f"Image assets must not contain symlinks: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
-            target.write_bytes(data)
-            return relative
-        if target.is_file() and target.read_bytes() == data:
-            return relative
-    raise ValueError("Too many conflicting image assets")
-
-
-def _materialize_markup_images(
-    content: str,
-    context: _ImageContext,
-    *,
-    page_idx: int,
-    owner: BlockBase,
-) -> str:
-    """按富 HTML 中的出现顺序，为所属视觉块的内嵌图片分配语义名称。"""
-    ordinal = 0
-
-    def replace(match: re.Match[str]) -> str:
-        """解析一个 img 的图片载荷并保留原有 HTML 属性及引号。"""
-        nonlocal ordinal
-        ordinal += 1
-        source = html.unescape(match.group("src")).strip()
-        if source.startswith("data:"):
-            data, extension = parse_image_data_uri_strict(source)
-        elif _is_external_source(source):
-            return match.group(0)
-        else:
-            safe_path = validate_image_sidecar_path(unquote(source))
-            candidate = context.asset_root / safe_path
-            _ensure_path_inside(context.asset_root, candidate)
-            data = candidate.read_bytes()
-            extension = candidate.suffix.lstrip(".")
-        relative = _write_materialized_asset(
-            context.output_dir,
-            data,
-            extension,
-            page_idx=page_idx,
-            owner=owner,
-            ordinal=ordinal,
-        )
-        return f"{match.group('prefix')}{match.group('quote')}{relative}{match.group('quote')}"
-
-    return _HTML_IMAGE_RE.sub(replace, content)
+        if relative_path not in existing:
+            target.write_bytes(payload)
+    return document
 
 
 def _copy_materialized_images(asset_root: Path, output_dir: Path) -> None:
@@ -768,11 +684,6 @@ def _safe_stem(value: str) -> str:
     # from_state() 的 stem 严格相等校验会拒绝解析时生成的 stem。
     truncated = normalized.encode("utf-8")[:120].decode("utf-8", errors="ignore")
     return truncated.strip("._") or "document"
-
-
-def _is_external_source(value: str) -> bool:
-    """判断图片引用是否已经是 scheme URL 或 data URI。"""
-    return bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value))
 
 
 __all__ = [
