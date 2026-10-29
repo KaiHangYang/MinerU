@@ -67,7 +67,9 @@ def resolve_default_tier(*, health: ParseServerHealth, remote: bool = False) -> 
     actions.append("explicitly pass --tier flash for text-only preview")
     raise ParseFailure(
         "quality_tier_unavailable",
-        f"No basic, standard, or advanced engine available. You can {_format_action_list(actions)}.",
+        probe_error_message(
+            f"No basic, standard, or advanced engine available. You can {_format_action_list(actions)}.", probe.error_msg
+        ),
     )
 
 

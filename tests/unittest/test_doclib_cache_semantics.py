@@ -493,8 +493,11 @@ def test_parse_server_health_probe_disables_env_proxy_for_local_urls(monkeypatch
     class _Response:
         status_code = 200
 
-        def json(self) -> dict[str, list[dict[str, str]]]:
-            return {"data": [{"id": "standard"}]}
+        def json(self) -> dict[str, Any]:
+            return {
+                "data": [{"id": "standard"}],
+                "features": {"task_output_formats": ["default"], "sources": ["upload", "url"]},
+            }
 
     class _AsyncClient:
         def __init__(self, *, timeout: int, trust_env: bool) -> None:

@@ -254,7 +254,7 @@ def _managed_parse_server_needs_restart(
 
 
 class ParseServerHealthCheck:
-    """Periodically probes parse-server health via GET /v1/tiers."""
+    """Periodically probes Tasks capabilities and parse-server tiers."""
 
     def __init__(
         self,
@@ -499,6 +499,25 @@ class ParseServerHealthCheck:
                 timeout=self.probe_timeout_sec,
                 trust_env=should_trust_env_for_url(base_url),
             ) as client:
+                base_url = base_url.rstrip("/")
+                resp = await client.get(f"{base_url}/v1/health", headers=headers)
+                if resp.status_code != 200:
+                    error_code, error_msg = _probe_error(resp)
+                    return ProbeResult(error_code=error_code, error_msg=error_msg)
+                features = resp.json().get("features", {})
+                if (
+                    not isinstance(features, dict)
+                    or "default" not in features.get("task_output_formats", [])
+                    or "upload" not in features.get("sources", [])
+                ):
+                    return ProbeResult(
+                        error_code="parse_server_unavailable",
+                        error_msg=(
+                            "Parse-server does not advertise the MinerU 4.1 Tasks upload/default-output contract. "
+                            "Upgrade the API server, Router and client together; "
+                            "configure the main API URL rather than the file-parse-server URL."
+                        ),
+                    )
                 resp = await client.get(f"{base_url}/v1/tiers", headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()

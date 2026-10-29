@@ -34,6 +34,8 @@ MinerU 仓库提供两款命令行工具：
 
 ## 3. 推荐阅读顺序
 
+从 4.0 升级时先阅读 [自定义 CLI 的 4.1 迁移说明](migration-4.1.md)。
+
 1. [mineru](mineru.md): 理解用户/Agent 入口的整体定位。
 2. [mineru parse](mineru-parse.md): 理解主动解析、默认 tier 选择、隐私、缓存、STDOUT 和 marker。
 3. [mineru read](mineru-read.md): 理解 locator-first 读取、page/block 定位、image 输出和 continuation。

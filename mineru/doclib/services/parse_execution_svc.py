@@ -376,7 +376,12 @@ class ParseExecutionService:
                     local_url = _local_parse_server_url(local_mode, health)
                     if local_url:
                         return local_url, await _local_parse_server_api_key(self.config_svc), "local"
-                raise ParseFailure("parse_server_unavailable", "Remote parse-server unavailable and no local fallback")
+                raise ParseFailure(
+                    "parse_server_unavailable",
+                    parse_policy.probe_error_message(
+                        "Remote parse-server unavailable and no local fallback", health.remote.probe.error_msg
+                    ),
+                )
             return url, api_key, "remote"
 
         # privacy == local
@@ -397,7 +402,12 @@ class ParseExecutionService:
                     ),
                     "parse_server.local.self_hosted_api_key",
                 )
-            raise ParseFailure("engine_unavailable", "Local parse-server is not ready. Please wait or check server status.")
+            raise ParseFailure(
+                "engine_unavailable",
+                parse_policy.probe_error_message(
+                    "Local parse-server is not ready. Please wait or check server status.", health.local.probe.error_msg
+                ),
+            )
 
         api_key = await _local_parse_server_api_key(self.config_svc)
         return local_url, api_key, "local"
