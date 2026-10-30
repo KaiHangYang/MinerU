@@ -31,6 +31,8 @@ Pick one backend and save it so you don't have to pass flags every time:
 ```bash
 # Your own self-hosted mineru-api
 mineru-cli config set --backend local --api-url http://<your-server>:8000
+# If your API Server/Router requires authentication:
+mineru-cli config set --api-key <your-api-key>
 
 # Official mineru.net cloud API (get a token at https://mineru.net/apiManage/docs)
 mineru-cli config set --backend cloud --token <your-token>
@@ -56,10 +58,24 @@ or `mineru-cli <command> --help` for the full reference.
 
 ## MinerU 4 server support
 
-The local backend discovers V1 servers and uses uploads, parse jobs, and per-file
-ZIP artifacts. Existing 3.x servers continue to use the legacy tasks API. For V1,
-`--model` accepts `flash`, `basic`, `standard` (default), or `advanced`; legacy
+The local backend discovers the current V1 Tasks protocol from `/v1/health`
+capabilities. It submits JSON manifests to `/v1/tasks`, uploads missing source
+bytes using each file's `upload.url` and headers, and downloads ZIP bundles from
+`result_url`. SHA-256 preflight allows the server to reuse cached source files.
+API Server and Router URLs may include a reverse-proxy path prefix.
+
+Earlier V1 uploads/parse-jobs servers and legacy 3.x servers remain supported.
+Protocol selection happens before submission; authentication or server errors
+never cause a second submission through another protocol. For current Tasks,
+`--model` accepts `flash`, `basic`, `standard`, or `advanced`; omitting it lets the
+server select an available tier (standard → basic → flash → advanced). Legacy
 `pipeline`, `hybrid-engine`, and `vlm-engine` map to basic, standard, and advanced.
+Use `--api-key`, `MINERU_API_KEY`, or `config set --api-key` for a protected
+self-hosted/Tasks deployment. API credentials are sent only to the API origin,
+including authenticated downloads; external storage links use their own headers.
+The existing `--token` / `MINERU_CLOUD_TOKEN` settings still select the official
+mineru.net v4 cloud API independently.
+
 V1 OCR language is configured on the server; `--lang`, `--no-formula`, and
 `--no-table` only apply to cloud/legacy servers. V1 `--verbose` preserves all
 available bundle JSON; original input files are not part of the V1 bundle.

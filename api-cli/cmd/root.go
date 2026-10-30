@@ -34,6 +34,7 @@ func init() {
 	pf := rootCmd.PersistentFlags()
 	pf.StringVar(&flags.Backend, "backend", "", `force "local" or "cloud" (default: inferred from --api-url/--token)`)
 	pf.StringVar(&flags.APIURL, "api-url", "", "self-hosted mineru-api base URL, e.g. http://192.168.1.10:38000")
+	pf.StringVar(&flags.APIKey, "api-key", "", "self-hosted/Tasks API key (Bearer; also MINERU_API_KEY)")
 	pf.StringVar(&flags.Token, "token", "", "mineru.net API token (Bearer), see https://mineru.net/apiManage/docs")
 	pf.StringVar(&flags.CloudURL, "cloud-url", "", "override the mineru.net API base URL (default https://mineru.net)")
 }

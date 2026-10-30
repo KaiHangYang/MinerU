@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -24,6 +25,7 @@ func (b *LocalBackend) detectProtocol(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	b.authorize(req)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return err
@@ -34,7 +36,11 @@ func (b *LocalBackend) detectProtocol(ctx context.Context) error {
 		b.v1 = false
 	case http.StatusOK:
 		var health struct {
-			Status string `json:"status"`
+			Status   string `json:"status"`
+			Features struct {
+				Formats []string `json:"task_output_formats"`
+				Sources []string `json:"sources"`
+			} `json:"features"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 			return fmt.Errorf("decode V1 health: %w", err)
@@ -43,6 +49,7 @@ func (b *LocalBackend) detectProtocol(ctx context.Context) error {
 			return fmt.Errorf("unexpected V1 health status: %q", health.Status)
 		}
 		b.v1 = true
+		b.tasks = slices.Contains(health.Features.Formats, "default") && slices.Contains(health.Features.Sources, "upload")
 	default:
 		raw, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("V1 health failed (HTTP %d): %s", resp.StatusCode, raw)
@@ -65,6 +72,7 @@ func (b *LocalBackend) v1JSON(ctx context.Context, method, path string, body, re
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	b.authorize(req)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return err
@@ -127,6 +135,7 @@ func (b *LocalBackend) uploadV1(ctx context.Context, path string) (string, error
 		for k, v := range upload.Headers {
 			req.Header.Set(k, v)
 		}
+		b.authorize(req)
 		resp, err := b.Client.Do(req)
 		if err != nil {
 			return "", err
@@ -150,18 +159,12 @@ func (b *LocalBackend) uploadV1(ctx context.Context, path string) (string, error
 }
 
 func (b *LocalBackend) submitV1(ctx context.Context, paths []string, opts ParseOptions) (string, error) {
-	var tier string
-	switch opts.Model {
-	case "", "hybrid-engine", "hybrid-auto-engine", "standard":
+	tier, err := localTier(opts.Model)
+	if err != nil {
+		return "", err
+	}
+	if tier == "" {
 		tier = "standard"
-	case "pipeline", "basic":
-		tier = "basic"
-	case "vlm", "vlm-engine", "vlm-auto-engine", "advanced":
-		tier = "advanced"
-	case "flash":
-		tier = "flash"
-	default:
-		return "", fmt.Errorf("unsupported V1 model %q; use flash, basic, standard, or advanced", opts.Model)
 	}
 	files := make([]map[string]any, 0, len(paths))
 	for _, path := range paths {
@@ -182,7 +185,7 @@ func (b *LocalBackend) submitV1(ctx context.Context, paths []string, opts ParseO
 	var job struct {
 		ID string `json:"job_id"`
 	}
-	err := b.v1JSON(ctx, http.MethodPost, "/v1/parse/jobs", map[string]any{
+	err = b.v1JSON(ctx, http.MethodPost, "/v1/parse/jobs", map[string]any{
 		"files": files, "tier": tier, "ocr_mode": mode, "output_formats": []string{"zip"},
 	}, &job)
 	if err != nil {
@@ -251,7 +254,7 @@ func (b *LocalBackend) downloadV1(ctx context.Context, status JobStatus, outDir 
 		if file.State != StateDone {
 			continue
 		}
-		if file.ArtifactID == "" {
+		if file.ArtifactID == "" && file.ZipURL == "" {
 			return written, fmt.Errorf("missing ZIP output for %s", file.Name)
 		}
 		dest := outDir
@@ -268,7 +271,11 @@ func (b *LocalBackend) downloadV1(ctx context.Context, status JobStatus, outDir 
 			used[strings.ToLower(folder)] = true
 			dest = filepath.Join(outDir, folder)
 		}
-		paths, err := b.downloadV1Zip(ctx, file.ArtifactID, dest, verbose)
+		resultURL := file.ZipURL
+		if resultURL == "" {
+			resultURL = b.BaseURL + "/v1/files/" + url.PathEscape(file.ArtifactID) + "/content"
+		}
+		paths, err := b.downloadV1Zip(ctx, resultURL, dest, verbose)
 		written = append(written, paths...)
 		if err != nil {
 			return written, err
@@ -277,11 +284,12 @@ func (b *LocalBackend) downloadV1(ctx context.Context, status JobStatus, outDir 
 	return written, nil
 }
 
-func (b *LocalBackend) downloadV1Zip(ctx context.Context, id, dest string, verbose bool) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.BaseURL+"/v1/files/"+url.PathEscape(id)+"/content", nil)
+func (b *LocalBackend) downloadV1Zip(ctx context.Context, resultURL, dest string, verbose bool) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resultURL, nil)
 	if err != nil {
 		return nil, err
 	}
+	b.authorize(req)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return nil, err

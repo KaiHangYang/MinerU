@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +19,8 @@ import (
 // LocalBackend talks to a self-hosted mineru-api server
 // (https://github.com/opendatalab/MinerU, the `mineru-api` entrypoint).
 type LocalBackend struct {
+	APIKey          string
+	tasks           bool
 	BaseURL         string
 	Client          *http.Client
 	protocolChecked bool
@@ -27,7 +30,19 @@ type LocalBackend struct {
 func NewLocalBackend(baseURL string) *LocalBackend {
 	return &LocalBackend{
 		BaseURL: strings.TrimRight(baseURL, "/"),
-		Client:  &http.Client{Timeout: 5 * time.Minute},
+		Client: &http.Client{
+			Timeout: 5 * time.Minute,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				base, err := url.Parse(baseURL)
+				if err != nil || !sameOrigin(base, req.URL) {
+					req.Header.Del("Authorization")
+				}
+				return nil
+			},
+		},
 	}
 }
 
@@ -42,6 +57,9 @@ type localSubmitResponse struct {
 func (b *LocalBackend) Submit(ctx context.Context, files []string, opts ParseOptions) (string, error) {
 	if err := b.detectProtocol(ctx); err != nil {
 		return "", err
+	}
+	if b.tasks {
+		return b.submitTasks(ctx, files, opts)
 	}
 	if b.v1 {
 		return b.submitV1(ctx, files, opts)
@@ -104,6 +122,7 @@ func (b *LocalBackend) Submit(ctx context.Context, files []string, opts ParseOpt
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 
+	b.authorize(req)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("submit to %s: %w", b.BaseURL, err)
@@ -137,6 +156,9 @@ func (b *LocalBackend) Status(ctx context.Context, jobID string) (JobStatus, err
 	if err := b.detectProtocol(ctx); err != nil {
 		return JobStatus{}, err
 	}
+	if b.tasks {
+		return b.statusTasks(ctx, jobID)
+	}
 	if b.v1 {
 		return b.statusV1(ctx, jobID)
 	}
@@ -144,6 +166,7 @@ func (b *LocalBackend) Status(ctx context.Context, jobID string) (JobStatus, err
 	if err != nil {
 		return JobStatus{}, err
 	}
+	b.authorize(req)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return JobStatus{}, err
@@ -204,6 +227,7 @@ func (b *LocalBackend) Download(ctx context.Context, jobID string, status JobSta
 	if err != nil {
 		return nil, err
 	}
+	b.authorize(req)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return nil, err

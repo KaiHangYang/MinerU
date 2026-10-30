@@ -27,6 +27,11 @@ var configShowCmd = &cobra.Command{
 		fmt.Printf("backend:     %s\n", orNone(cfg.Backend))
 		fmt.Printf("api_url:     %s\n", orNone(cfg.APIURL))
 		fmt.Printf("cloud_url:   %s\n", orNone(cfg.CloudURL))
+		if cfg.APIKey != "" {
+			fmt.Println("api_key:     (set)")
+		} else {
+			fmt.Println("api_key:     (none)")
+		}
 		if cfg.CloudToken != "" {
 			fmt.Println("cloud_token: (set)")
 		} else {
@@ -39,6 +44,7 @@ var configShowCmd = &cobra.Command{
 var (
 	setBackend    string
 	setAPIURL     string
+	setAPIKey     string
 	setCloudToken string
 	setCloudURL   string
 )
@@ -58,6 +64,9 @@ var configSetCmd = &cobra.Command{
 		}
 		if setAPIURL != "" {
 			cfg.APIURL = setAPIURL
+		}
+		if cmd.Flags().Changed("api-key") {
+			cfg.APIKey = setAPIKey
 		}
 		if setCloudToken != "" {
 			cfg.CloudToken = setCloudToken
@@ -84,6 +93,7 @@ func orNone(s string) string {
 func init() {
 	configSetCmd.Flags().StringVar(&setBackend, "backend", "", `"local" or "cloud"`)
 	configSetCmd.Flags().StringVar(&setAPIURL, "api-url", "", "self-hosted mineru-api base URL")
+	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", "self-hosted/Tasks API key (empty clears the saved key)")
 	configSetCmd.Flags().StringVar(&setCloudToken, "token", "", "mineru.net API token")
 	configSetCmd.Flags().StringVar(&setCloudURL, "cloud-url", "", "override the mineru.net API base URL")
 

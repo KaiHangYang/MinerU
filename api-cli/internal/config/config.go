@@ -21,6 +21,7 @@ import (
 type FileConfig struct {
 	Backend    string `json:"backend,omitempty"` // "local" or "cloud"
 	APIURL     string `json:"api_url,omitempty"`
+	APIKey     string `json:"api_key,omitempty"`
 	CloudToken string `json:"cloud_token,omitempty"`
 	CloudURL   string `json:"cloud_url,omitempty"`
 }
@@ -83,6 +84,7 @@ func Save(cfg FileConfig) (string, error) {
 type Flags struct {
 	Backend  string
 	APIURL   string
+	APIKey   string
 	Token    string
 	CloudURL string
 }
@@ -105,6 +107,12 @@ func Resolve(flags Flags) (backend.Backend, error) {
 	}
 
 	apiURL := firstNonEmpty(flags.APIURL, os.Getenv("MINERU_API_URL"), file.APIURL)
+	apiKey := firstNonEmpty(flags.APIKey, os.Getenv("MINERU_API_KEY"), file.APIKey)
+	local := func() *backend.LocalBackend {
+		b := backend.NewLocalBackend(apiURL)
+		b.APIKey = apiKey
+		return b
+	}
 	token := firstNonEmpty(flags.Token, os.Getenv("MINERU_CLOUD_TOKEN"), file.CloudToken)
 	cloudURL := firstNonEmpty(flags.CloudURL, os.Getenv("MINERU_CLOUD_URL"), file.CloudURL, backend.DefaultCloudBaseURL)
 	which := firstNonEmpty(flags.Backend, os.Getenv("MINERU_BACKEND"), file.Backend)
@@ -114,7 +122,7 @@ func Resolve(flags Flags) (backend.Backend, error) {
 		if apiURL == "" {
 			return nil, fmt.Errorf("backend=local but no --api-url given (also checked MINERU_API_URL and the config file)")
 		}
-		return backend.NewLocalBackend(apiURL), nil
+		return local(), nil
 	case "cloud":
 		if token == "" {
 			return nil, fmt.Errorf("backend=cloud but no --token given (also checked MINERU_CLOUD_TOKEN and the config file); get one at https://mineru.net/apiManage/docs")
@@ -126,7 +134,7 @@ func Resolve(flags Flags) (backend.Backend, error) {
 		case apiURL != "" && token != "":
 			return nil, fmt.Errorf("both --api-url and --token are set; pass --backend local or --backend cloud to disambiguate")
 		case apiURL != "":
-			return backend.NewLocalBackend(apiURL), nil
+			return local(), nil
 		case token != "":
 			return backend.NewCloudBackend(cloudURL, token), nil
 		default:

@@ -73,6 +73,6 @@ func init() {
 	resultCmd.Flags().BoolVar(&resultWait, "wait", false, "block until the job finishes instead of failing if it's still running")
 	resultCmd.Flags().DurationVar(&resultTimeout, "timeout", 30*time.Minute, "max time to wait with --wait")
 	resultCmd.Flags().BoolVar(&resultVerbose, "verbose", false, "keep all available JSON and other artifacts instead of just markdown + images (cloud and local V1; legacy local servers decide this at submit time)")
-	resultCmd.Flags().IntVar(&resultSplitLevel, "split-level", 0, "split the markdown output by heading level: 0 = one file (default), 1 = split on \"#\" headings, 2 = split on \"##\" headings")
+	resultCmd.Flags().IntVar(&resultSplitLevel, "split-level", 2, "split the markdown output by heading level: 0 = one file, 1 = split on \"#\" headings, 2 = split on \"##\" headings (default)")
 	rootCmd.AddCommand(resultCmd)
 }

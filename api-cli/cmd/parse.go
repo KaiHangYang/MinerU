@@ -67,6 +67,6 @@ func init() {
 	addParseOptFlags(parseCmd, &parseOpts)
 	parseCmd.Flags().StringVarP(&parseOutDir, "output", "o", "./output", "local directory to write results into")
 	parseCmd.Flags().DurationVar(&parseTimeout, "timeout", 30*time.Minute, "max time to wait for parsing to finish")
-	parseCmd.Flags().IntVar(&parseSplitLevel, "split-level", 0, "split the markdown output by heading level: 0 = one file (default), 1 = split on \"#\" headings, 2 = split on \"##\" headings")
+	parseCmd.Flags().IntVar(&parseSplitLevel, "split-level", 2, "split the markdown output by heading level: 0 = one file, 1 = split on \"#\" headings, 2 = split on \"##\" headings (default)")
 	rootCmd.AddCommand(parseCmd)
 }
