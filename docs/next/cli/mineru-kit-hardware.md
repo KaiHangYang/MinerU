@@ -11,53 +11,60 @@ mineru-kit hardware info
 mineru-kit hardware info --json > hardware-info.json
 ```
 
-`hardware` 不带子命令时显示帮助。没有 `--quiet` 或 `auto-tier` 别名。配置沿用 `MINERU_CONFIG`、`MINERU_HOME` 和现有后端/设备环境变量。
+`hardware` 不带子命令时显示帮助。根帮助及各级硬件帮助按需加载命令描述，不读取用户配置或启动硬件探测。没有 `--quiet` 或 `auto-tier` 别名。配置沿用 `MINERU_CONFIG`、`MINERU_HOME` 和现有后端/设备环境变量。
 
 ## 自动推荐
 
-命令与 `api-server --tier auto` 共享结构化推荐结果。先解析有效小模型后端，再确定设备与上限：
+命令与 API、WebUI 的自动启动共享结构化推荐结果。先解析有效小模型后端，再直接采用其 GPU/CPU 设备结论，不查询显存容量：
 
-| 有效后端 | 行为 |
-|----------|------|
-| Torch + 可用 CUDA/MPS/XPU 等加速设备 | 跳过 OCR 测速；选定设备的显存／预算至少 5.5 GiB 时推荐 advanced，否则按 CPU 条件推荐 |
-| Torch + 显式 CPU 或加速设备不可用 | 跳过测速，进程可用逻辑 CPU 至少 4 时推荐 basic，否则 flash |
-| ONNX | CPU 至少 4 核或存在内存达标的兼容 GPU 候选时，在 Windows/Linux 同步完成现有设备选型；实际选中 GPU 且内存达标时开放全部四档，不再额外检查性能证据 |
+| 设备结论 | 进程可用逻辑核数 | PDF/图片开放档位 | 请求默认档位 |
+|----------|------------------|------------------|--------------|
+| GPU | 不限 | flash、basic、standard、advanced | standard |
+| CPU | 至少 12 | flash、basic、standard | standard |
+| CPU | 4–11 | flash、basic | basic |
+| CPU | 不足 4 | flash | flash |
 
-自动推荐的 CPU 条件只开放 Basic：进程可用逻辑核数至少 4 时开放 `flash,basic`，默认请求 Basic，否则只开放 Flash。计数遵守进程亲和性和容器 CPU 配额。GPU 经现有选型确认可用且显存／预算至少 `5_905_580_032` 字节时，独立于 CPU 核数开放全部四档；默认请求仍为 Standard，Advanced 必须显式请求。
+CPU 计数沿用进程亲和性和 Linux cgroup 配额限制。读取失败回退为 1 核并记录警告，不影响已确认的 GPU 结果。CPU 核数再多也不自动开放 Advanced。
 
-内存检查只使用确认设备的原始字节值，不四舍五入、不累加多卡，也不读取 `MINERU_VIRTUAL_VRAM_SIZE`。独显按专用显存总量判断；Apple Metal 按推荐工作集预算，Windows 集显按 DXGI 本地预算，Linux 集显按 Vulkan `heapBudget` 判断。预算比较使用上限，不减去当前用量。不能唯一关联设备、容量未知、预算扩展不可用或查询失败时按 CPU 条件推荐；系统总内存和共享内存理论上限不能替代 GPU 预算。
+Torch（包括 `small_backend=auto` 最终选择 Torch）使用经过可用性验证的加速设备结论，包括 CUDA/ROCm、MPS、XPU 等。显式 CPU、设备不可用或探测失败时按 CPU 规则推荐，并保留原因与警告。该分支不调用 ONNX 选型、不下载 OCR 校准权重，也不修改 ONNX 配置或校准记录。
 
-`small_backend=auto` 最终选择 Torch 时同样免校准。显式设备字符串必须经过实际可用性检查；检查失败会给出保守结果及原因，不修改设备配置。Torch 推荐不依赖 llama.cpp 库存，不下载 ONNX 校准权重，也不写入 `model.onnx_device` 或 OCR 校准记录。
+ONNX 分支在所有 CPU 核数下调用现有 `resolve_onnx_device()`，复用进程缓存、兼容策略、显式配置和校准。Windows 确认的独显，以及 Linux 通过兼容检查、由 Vulkan 唯一识别并配置物理绑定的独显，保留免 OCR 校准路径。`onnx_device=auto` 下需要测速的候选沿用 0.8 阈值；首次可能准备或下载 OCR rec 模型。下载和派生图准备不计入 15 秒校准 worker 超时。校准失败、超时或不稳定时使用本次 CPU 结果推荐。
 
-ONNX 分支保留既有兼容策略、0.8 阈值和进程缓存。Windows 确认的独显，以及 Linux 通过兼容检查、由 Vulkan 唯一识别并配置物理绑定的独显，均免 OCR 校准，报告 `status=skipped, reason=discrete_gpu`；首次真实 GPU 会话成功后才保存 `gpu`，硬件推荐本身不生成校准记录。`onnx_device=auto` 时，集显或类型无法确认的候选继续沿用现有设备选型测速，首次可能下载 OCR rec 模型；下载和派生图准备不计入 15 秒校准 worker 超时。校准失败、超时或不稳定导致本次设备选型回退 CPU 时，按 CPU 条件推荐，并携带警告。
+`onnx_device=gpu` 无论来自用户配置还是先前自动选型，都不强制测速。实际选中 GPU 就开放全部四档；校准记录缺失、损坏、过期或记录 GPU 较慢均不额外阻止开放。此时推荐原因是 `configured_gpu`，校准状态为 `status=skipped, reason=configured_gpu`。记录摘要仅供诊断，读取失败附带警告，不改变设备和档位结论。`onnx_device=cpu` 及不受支持平台的 ONNX CPU 回退均遵循 CPU 规则；ONNX 分支不额外探测 Apple Metal。
 
-`onnx_device=gpu` 无论来自用户配置还是之前的自动选型，都不触发测速；实际选中兼容 GPU 后，仅检查该设备的显存／预算是否达到 5.5 GiB。校准记录缺失、损坏、过期或记录 GPU 较慢，均不阻止内存达标的 GPU 开放 Standard/Advanced。此时推荐原因是 `configured_gpu`，校准状态为 `status=skipped, reason=configured_gpu`。内存不足或未知时报告相应内存原因。记录摘要只供诊断，读取失败会附带警告，不改变设备和档位结论。`onnx_device=cpu` 仍遵循 CPU 规则。
+推荐与 llama.cpp 自动模式复用相同的小模型设备选择入口，不读取 llama 专用参数，也不额外探测 ggml 库存或匹配显卡身份。VLM 使用其他引擎或远程服务不会自动扩大推荐上限。
 
-llama.cpp 自动集显路径同样按有效小模型后端分流：Torch 使用加速可用性结果，不再绕回 OCR 校准；ONNX 保留原有性能结果和设备身份匹配。原生独显优先、显式 CPU/GPU 参数、物理绑定和兼容处理保持不变。
+JSON 报告保持 `schema_version=1`，包含 `ceiling`、`pdf_image_tiers`、`default_request_tier`、`reason`、`cpu_count`、`small_backend`、`vlm_engine`、`device`、`calibration` 和 `warnings`。兼容保留 `gpu_memory` 字段，固定为 `null`；文本不再展示内存门槛。Torch 校准状态为 `status=skipped, reason=torch_backend`，不将可用性标成性能实测通过。
 
-OCR、llama.cpp、档位推荐与诊断共用 GPU 分类和双向唯一身份匹配。先按各后端的实际可见性和兼容性过滤，再按独显、集显、虚拟 GPU、未知类型排序；后端之间无需选择同一张卡。ggml 的 GPU/IGPU 标志不再直接作为独显判据，Windows 使用 D3D12 UMA、Linux 使用 Vulkan 原生分类。无法唯一关联的设备保留未知类型，不授予独显免校准或仅凭类型开放 Advanced。
-
-JSON 报告保留 `schema_version=1`，包含 `ceiling`、`pdf_image_tiers`、`default_request_tier`、`reason`、`cpu_count`、`small_backend`、`vlm_engine`、`device`、`calibration` 和 `warnings`，并增补 `gpu_memory`。内存证据包含 `device`、`identity`、`memory_bytes`、`kind`（`dedicated`／`budget`／`unknown`）、`source`、`warning`；没有候选设备时为 `null`。校准状态来自执行结果；Torch 使用 `status=skipped, reason=torch_backend`，不将可用性结论标成性能实测通过。
-
-本次实际选型落在 CPU 或选型失败时，不会凭静态显卡库存重新开放高档位。性能判断归属 ONNX 自动设备选型，auto tier 不增加独立测速或历史性能证据门槛。设备容量信息不进入 OCR 校准指纹，每次启动读取当前选定设备的内存容量。每个服务在启动阶段形成一次最终开放集合，运行过程中不动态升降档位。
-
-开放 Advanced 后，请求省略 tier 仍默认 Standard。推荐不代表模型已准备好，API 服务继续执行依赖预检；显式启动上限和 Python 精确集合不进入自动推荐。API 工厂的 VLM 配置覆盖参与共享推荐，远程 VLM 显示为 `http-client`，不自动扩大本机上限。
+每个服务在启动阶段形成一次最终开放集合，运行中不动态升降档位。选型落在 CPU 或失败时按 CPU 核数推荐，不凭静态显卡库存升级。显式启动上限和 Python 精确集合跳过自动推荐；依赖预检、可选预加载和原生文档固定 Flash 的行为保持不变。开放全部四档时请求默认仍为 Standard。
 
 ## 环境报告
 
-`info` 不调用自动推荐或 OCR 校准，不下载、加载模型权重或写配置。运行时导入和原生 GPU 探测使用独立子进程，每项最多等待 15 秒。某项失败时继续报告其他信息，并区分未安装、导入失败和超时。
+`info` 不调用自动推荐或 OCR 校准，不下载、加载模型权重或写配置。运行时导入和原生 GPU 探测使用独立子进程，最多并发 4 项，并与系统信息采集重叠进行；每项子进程启动后最多等待 15 秒。某项失败时继续报告其他信息，并区分未安装、导入失败和超时。
 
-- 系统、Python 版本与解释器路径，MinerU 版本与实际模块路径。
-- CPU 型号、物理/逻辑/进程可用核数，基础/当前/最大频率（MHz）；内存总量及可用量（bytes）。
+默认文本先输出系统、Python 和 MinerU 版本，再依次输出 CPU/内存、已安装软件、完成合并的显卡库存、运行时探测、有效配置及设备选择与校准信息。每节完成后立即刷新，重定向到管道时也无需等到整份报告完成。`--json` 仍一次输出完整对象，原有字段和结果顺序保持稳定，`schema_version=1`；ONNX 运行时结果补充 `selected_device`，记录只读选型及原因。
+
+- 系统、Python 和 MinerU 版本；JSON 额外保留解释器与实际模块路径。
+- CPU 型号、物理/逻辑/进程可用核数，基础/当前/最大频率（MHz）；内存总量及可用量。文本容量统一按 `1024³` 换算为三位小数的 GiB，JSON 保留原始字节数。
 - 系统可探测到的全部独显、集显和虚拟 GPU，以及当前进程运行时可用设备。保留名称、身份、驱动及可获得的显存/共享内存信息。
 - GPU 的 `kind` 与选型共用同一套分类；`kind_source` 标识分类来源，`source` 保留硬件资料的采集来源，`unified_memory` 单独记录已知的统一内存属性。
-- 已安装的软件包版本与位置：MinerU、DocVortex、mineru-llama-cpp、mineru-vl-utils、torch、transformers、ONNX Runtime及EP、vLLM、LMDeploy、mlx-vlm、pypdfium2。未安装的包不列入软件版本列表。
-- Torch 导入、编译使用的 CUDA/ROCm 版本和后端可用性；ORT provider 与相关引擎的探测结果。
+- 已安装的软件包版本：MinerU、DocVortex、mineru-llama-cpp、mineru-vl-utils、torch、transformers、ONNX Runtime及EP、vLLM、LMDeploy、mlx-vlm、pypdfium2。JSON 额外保留安装位置，未安装的包不列入软件版本列表。
+- 运行时摘要：实际小模型后端与 VLM 引擎、各运行时状态和版本；Torch 只展示选中设备及其型号/容量，ONNX 展示可用 provider 和选中候选，llama.cpp 展示可见设备名称。
 - 后端、设备、线程及可见设备限制的有效配置与来源；OCR 校准记录的存在状态、环境匹配、稳定性、耗时和阈值。
+
+运行时文本不直接展开内部 `selection`、`backends` 或适配器字典。Torch 的 CUDA/ROCm 构建版本仅在选中相应设备且版本已知时展示；CPU、MPS 及 NPU/GCU/MUSA/MLU/SDAA 等扩展设备直接显示实际设备名，不列出其他不可用后端，也不套用无关构建字段。这些构建版本来自 Torch 自身，不代表系统驱动或另行安装的工具链版本。
+
+Windows DXGI 和 Linux Vulkan 的原生库存用于补充“系统显卡”，不在运行时文本中重复展开；macOS 使用系统工具采集，不执行 DXGI/Vulkan 这两项库存探测。采集错误仍进入提示，完整后端矩阵、所有适配器及 LUID/PCI/厂商标识等诊断字段继续保留在 `--json` 中。
+
+“设备选择与校准”展示当前小模型后端、设备及选择依据。Torch 直接使用运行时的设备检查结果，并说明不适用 ONNX OCR 校准；ONNX 复用实际选型的候选规则，解释显式 CPU/GPU、独显免校准、不可用或待校准的情况。只读检查不会初始化 GPU 推理会话；需要测速时，设备显示“待校准”（JSON `selected_device.device` 为 `null`），不预先声称 CPU 或 GPU 胜出。
+
+存在有效校准记录时展开详细信息；没有详细记录时仅展示设备选择与原因，不列出空的测速字段。损坏或不可读的记录保留路径及错误。当前为 Torch 时，已有 ONNX 记录明确标注为不参与当前选择。JSON 的原始 `calibration` 对象仍保留全部字段。
 
 未知值为 JSON `null`，文本显示“未知”。例如 Apple Silicon 通常不报告可可靠读取的 CPU 主频，统一内存也不作为独立显存。系统或容器限制导致库存不完整时保留错误说明；不从型号名称猜测设备类型或频率。
 
-配置报告使用明确白名单，不输出认证信息、完整远程服务地址或整个环境变量集合。诊断报告中的本地路径用于确认解释器和实际加载位置。
+独立显存采集能力和 Windows PCI 身份修复继续保留，其结果不参与自动 tier。Windows 原生查询不依赖 Torch：DXGI 库存通过 `D3DKMTOpenAdapterFromLuid` / `D3DKMTQueryAdapterInfo(KMTQAITYPE_ADAPTERADDRESS)` 补充物理 PCI 位置，内存仍由对应适配器的 DXGI 接口读取。身份匹配优先使用 LUID 和已知 PCI 坐标，不猜测缺失字段；查询失败或多个同等匹配保留未知。读取预算成功不代表模型推理已验证。
+
+配置报告使用明确白名单，不输出认证信息、完整远程服务地址或整个环境变量集合。文本隐藏解释器、模块和软件安装路径，保留配置文件及校准记录路径；JSON 中的完整本地路径仍可用于确认解释器和实际加载位置。
 
 ## 退出码
 

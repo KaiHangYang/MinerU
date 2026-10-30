@@ -9,22 +9,24 @@ model:
 ```
 
 环境变量 `MINERU_MODEL_ONNX_DEVICE` 高于文件配置。`small_backend=auto` 仍按原有规则选择
-Torch 或 ONNX；此选项不强制切换模型栈，也不改变 Torch / VLM 的设备。
+Torch 或 ONNX；此选项不强制切换模型栈，也不改变 Torch 的设备。小模型使用 ONNX 时，
+llama.cpp 自动模式复用这里的 CPU/GPU 结论。
 
 ### 共享 GPU 分类与选型
 
-OCR、llama.cpp、auto tier 和硬件诊断共用 `discrete / integrated / virtual / unknown` 分类。
+OCR 和硬件诊断共用 `discrete / integrated / virtual / unknown` 分类；auto tier 直接复用 OCR 设备选择的最终结果。
 Windows 的分类依据为 D3D12 UMA，Linux 为 Vulkan 原生设备类型，macOS 复用现有系统显示设备信息。
 统一内存属性单独保存，不将 Apple Silicon 的集显分类解释为低性能设备。
 
-各后端先应用显式配置、设备可见性及兼容限制，再按“确认独显 → 确认集显 → 虚拟 GPU → 类型未知”排序；
-同类设备保留 Windows 高性能排序、Vulkan 原生顺序或 llama.cpp 的单后端多设备分组规则。
-OCR 与 llama.cpp 可以因支持范围不同选择不同显卡；不在目标后端候选中的独显不影响当前设备的校准或推荐。
+ONNX 先应用显式配置、设备可见性及兼容限制，再按“确认独显 → 确认集显 → 虚拟 GPU → 类型未知”排序；
+同类设备保留 Windows 高性能排序或 Vulkan 原生顺序。自动 tier 不再查询显存容量。
+身份匹配优先使用 LUID、PCI 地址，再使用双方唯一的厂商/设备型号；名称只用于原生库存的唯一关联。
+重复库存或原生查询失败时保留未知类型，不据此授予独显免校准资格。
 
-ggml 的 GPU/IGPU 枚举仅用于确定 llama.cpp 可见的 GPU 库存，分类来自与平台原生设备的唯一关联。
-身份匹配优先使用双方已有的 LUID、PCI 地址，再使用双方唯一的厂商/设备型号；名称只用于原生库存的唯一关联，
-不用于猜测类型。重复库存、同型号多卡无法唯一关联或原生查询失败时保留未知，不凭此开放 Advanced 或免校准。
-本实现不增加 UUID、PCI 地址等身份采集。Torch 的加速可用性推荐和 Apple Silicon/MPS 特例保持不变。
+llama.cpp 的 CPU/GPU 自动决策直接复用小模型后端，具体显卡交给原生引擎。
+MinerU 不在启动推荐或模型构造时枚举 ggml、匹配 ONNX/llama 显卡、绑定 Vulkan 编号或重映射设备名。
+`hardware info` 仍可显式运行隔离的 llama 诊断；Windows 诊断读取有效 Vulkan LUID 与 DXGI 关联，
+但诊断库存不参与推荐或推理决策。
 
 | 值 | Windows DML | Linux WebGPU |
 |---|---|---|
@@ -95,9 +97,9 @@ MinerU 的 WebGPU 运行时锁覆盖过滤与会话初始化，后续每次会�
 单张集显保持默认物理选择。若原生类型查询失败且 ORT 库存中的架构均受支持，则保留默认候选并继续校准，
 不会据此授予独显免校准资格；存在受限 Intel 架构时，查询失败直接回退 CPU。
 
-本机双卡及仅 Intel ICD 的验证见 [Intel 架构过滤报告](onnx-intel-architecture-policy-validation.md)。
+本机双卡及仅 Intel ICD 的验证见 [Intel 架构过滤报告](https://github.com/opendatalab/MinerU/blob/master/docs/archive/performance/onnx-intel-architecture-policy-validation.md)。
 
-通常在首次实际使用 ONNX 模型时选型。API 使用 `--tier auto`（或省略），有效小模型后端为 ONNX，且可用逻辑 CPU 至少 4 核或存在显存／预算达到 5.5 GiB 的兼容 GPU 候选时，Windows/Linux 会提前同步调用相同的设备选择流程，并直接采用本次设备选型结果，不依赖 `--preload-models`。实际选中 GPU 且内存达标时开放 Standard/Advanced；auto tier 不增加独立测速，也不额外检查历史校准是否胜出。`onnx_device=gpu` 无论来自用户偏好还是自动选型写入，均免测速，校准记录缺失、损坏、过期或 GPU 较慢不阻止内存达标的已选 GPU 开放高级档位。CPU 不足 4 核且无内存达标 GPU 候选、显式启动档位或 macOS 不增加这项启动选型。有效小模型后端为 Torch 时采用实际设备可用性和内存证据并跳过 OCR 校准，不修改 ONNX 设备偏好或证据；llama.cpp 自动集显路径也遵循这处分流。
+通常在首次实际使用 ONNX 模型时选型。API/WebUI 使用自动 tier 且有效小模型后端为 ONNX 时，会在所有 CPU 核数下提前同步调用相同的设备选择流程，不依赖 `--preload-models`。选中 GPU 就开放全部四档；选中 CPU 时，可用逻辑核至少 12 开放到 Standard，4–11 核开放到 Basic，不足 4 核只开放 Flash。推荐不查询显存、不增加独立测速，也不额外要求历史校准证据。`onnx_device=gpu` 无论来自用户偏好还是自动选型写入，均不强制测速。显式启动档位和 Python 精确集合跳过推荐。有效小模型后端为 Torch 时采用已验证的加速设备结论，不调用 ONNX 或修改其配置/证据。llama.cpp 自动模式也复用相同的小模型设备选择入口。
 
 `mineru-kit hardware detect` 与 API 自动启动共享推荐逻辑；`hardware info` 只读报告环境与校准记录，不测速。界面启动本身、导入 SDK、查询配置和模型列表不会运行测速；界面托管的 API 服务仍遵循其启动参数。
 自动决策成功后原子更新有效配置文件中的 `model.onnx_device`，保留其余键；进程间通过文件锁协调。
@@ -105,12 +107,36 @@ MinerU 的 WebGPU 运行时锁覆盖过滤与会话初始化，后续每次会�
 实际设备或物理绑定改变后，诊断报告会显示旧记录不再匹配；这不会覆盖配置中的设备偏好，也不会单独限制已选 GPU 的档位。
 Windows/Linux 免校准独显都只在首次真实 GPU 会话成功后保存 `gpu`；仅运行硬件推荐时仍保留 `auto`，
 不下载校准权重、不生成性能校准记录。初始化错误或静默回退 CPU 不保存 GPU 偏好。
-环境变量覆盖不写入文件；只读配置保留本进程选择。测速失败不保存为 CPU 性能优胜，同进程不重复尝试。写入 `onnx_device=gpu` 不要求达到 5.5 GiB，该内存门槛只用于 auto tier 开放 Standard/Advanced；较小的 GPU 仍可用于 ONNX 加速。
+环境变量覆盖不写入文件；只读配置保留本进程选择。测速失败不保存为 CPU 性能优胜，同进程不重复尝试。设备偏好和自动 tier 均不设置显存容量门槛。
 Linux 插件缺失、没有可用设备、物理绑定失败、校准超时或输出不一致时保留 `auto`。
 通过环境变量强制 `auto` 时，每个新进程重新选择，并使用选择锁避免同时测速。
 显式或已保存的 `cpu` 不会因后来接入独显而改变。
 
 要重新测量，将配置改回 `auto` 并重启应用。修改程序阈值也不主动覆盖已保存的选择。
+
+## llama.cpp 自动模式与手动覆盖 {#llama-auto-mode}
+
+Windows/Linux 的 Engine 和 `llama-server` 复用同一 CPU/GPU 决策：
+
+- 小模型为 ONNX：使用 `resolve_onnx_device()` 的结果和进程缓存。兼容独显免测速；集显或类型未知按既有 OCR 校准决定。
+- 小模型为 Torch：使用已核验的 Torch 加速器可用性，不调用 ONNX、不下载 OCR 校准模型。
+- CPU：模型、视觉投影均使用 CPU，server 同时关闭额外算子卸载。
+- GPU：允许原生运行时按默认规则选择显卡；不要求它与 ONNX 使用同一物理卡，不新增 VLM 测速。
+- macOS：保持原生 Metal/CPU 路径。
+
+显式 `MINERU_LLAMA_CPP_BACKEND`、GPU 层数、server 设备或投影设备参数优先于自动模式。
+原生设备名称与用户提供的可见设备环境变量保持原样；“主模型 CPU、投影 GPU”等显式组合继续支持。
+原生引擎负责实际显卡选择及参数合法性；其自动 GPU 不可用回退保持原样，显式后端不可用及推理错误直接报告，不另行重试。
+`llama.cpp device policy` 日志说明共享决策来源；原生 Engine 的 `verbosity=LOG_LEVEL_INFO` 可查看实际设备。
+
+仅自动 ONNX 路径在 Linux 选择 WebGPU、已选适配器为 Intel legacy/Xe-LP/Xe-LPG 架构时，
+MinerU 才在初始化期间补充 `GGML_VK_SERIALIZE_SUBMISSIONS=1`。依据来自 ONNX 已有适配器信息，
+不再探测 llama 的实际显卡。用户已设置的值（包括 `0`）优先；Torch 和手动选卡路径需自行设置该兼容变量。
+临时环境设置使用互斥锁并在成功或异常后恢复；不生成 `GGML_VK_VISIBLE_DEVICES`。
+离线 server 仍禁止为自动选型下载校准模型，缺少本地权重时沿用现有 ONNX CPU 回退。
+
+档位推荐只消费小模型后端的 GPU/CPU 结论和进程可用逻辑核数，不受 llama 专用后端参数或诊断失败影响。
+GPU 开放全部四档；CPU 至少 12 核开放到 Standard，至少 4 核开放到 Basic，否则只开放 Flash。存在 Standard 时请求默认仍为 Standard。
 
 ## 模型预设
 
@@ -158,7 +184,7 @@ CTC 去重、blank 删除、置信度平均和输入顺序还原继续由识别�
 自动选型也使用该派生图，图转换发生在 15 秒 worker 预算之外。报告记录源模型、派生模型 SHA256
 及 `output_format`，阈值工具拒绝混合完整概率输出和精简输出的报告。已有保存的 cpu/gpu 不会被覆盖；
 需要重新测速时设置 `auto`。历史完整概率输出测速保留作为优化前对照，不据此重新推导精简图阈值。
-本机阶段耗时、输出一致性和 EP 验证见 [精简 rec 生产验证](onnx-compact-rec-validation.md)。
+本机阶段耗时、输出一致性和 EP 验证见 [精简 rec 生产验证](https://github.com/opendatalab/MinerU/blob/master/docs/archive/performance/onnx-compact-rec-validation.md)。
 
 ### 测量协议
 
@@ -187,14 +213,14 @@ worker 报告 schema v5，`measurement` 保存完整自适应规则；`sampling`
 每端同时保留全部实际预热、计时、波动与漂移指标。每一次推理均检查输出及重复解码，两个后端解码必须一致。
 阈值推导拒绝混合不同测量策略或决策阈值；同一自适应策略内的短测/长测可共同记录，持续不稳定的结果不能用于推导。
 
-本机实测及 NHWC 缩小复现见 [自适应校准与 UHD 770 诊断](onnx-adaptive-calibration-uhd770-validation.md)。
-此前固定 3＋7 与整本测试见 [轮次和预打包报告](onnx-i7-12700-nhwc-no-prepack-validation.md)。
+本机实测及 NHWC 缩小复现见 [自适应校准与 UHD 770 诊断](https://github.com/opendatalab/MinerU/blob/master/docs/archive/performance/onnx-adaptive-calibration-uhd770-validation.md)。
+此前固定 3＋7 与整本测试见 [轮次和预打包报告](https://github.com/opendatalab/MinerU/blob/master/docs/archive/performance/onnx-i7-12700-nhwc-no-prepack-validation.md)。
 UHD 770 关闭预打包仍存在内容错误及挂起，生产 WebGPU 布局和预打包参数未因本次校准改动而调整。
 阈值在 `mineru.model.runtime.onnx_device` 中集中维护。
 阈值按后端独立维护：`dml=0.8`、`webgpu=0.8`，即 GPU 推理耗时至少比 CPU 低 20%。
 Linux 8060S 六图预检比值为 0.420、0.502、0.523，解码一致；目前没有跨硬件证据支持另设 WebGPU 数值。
 原三机校准推导值为 0.69639683662382，保留为历史参考；已有 24 次记录按 0.8 判断仍得到相同选择。
-详细数据见 [DML 三机校准报告](onnx-selection-validation.md) 和 [Linux WebGPU 生产验证](onnx-webgpu-validation.md)。
+详细数据见 [DML 三机校准报告](https://github.com/opendatalab/MinerU/blob/master/docs/archive/performance/onnx-selection-validation.md) 和 [Linux WebGPU 生产验证](https://github.com/opendatalab/MinerU/blob/master/docs/archive/performance/onnx-webgpu-validation.md)。
 
 下载和设备发现不计入 worker 预算。独立隐藏子进程的总超时为 15 秒，包含解释器启动、加载及推理；
 1–2 秒只是小样本推理目标。结果记录 backend、模型/输入校验值、ORT/EP 版本、参数、provider、初始化、预热和正式计时。
@@ -272,4 +298,4 @@ Windows x64 的完整依赖安装、发行包身份、真实分类、rec 与文�
 ```
 
 不能把两个 ORT 发行包或两个 Magika 发行包同时存在视为有效安装。
-版本、校验值、平台矩阵与实测结果见 [依赖验收报告](onnx-dependency-validation.md)。
+版本、校验值、平台矩阵与实测结果见 [依赖验收报告](https://github.com/opendatalab/MinerU/blob/master/docs/archive/performance/onnx-dependency-validation.md)。
